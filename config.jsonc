@@ -1,0 +1,52 @@
+{
+  "embedding": {
+    "provider": "local",
+    "model": "all-MiniLM-L6-v2",
+    "dimensions": 384,
+    "baseUrl": "",
+    "apiKey": ""
+  },
+  "dedupThreshold": 0.25,
+  "logging": {
+    "enabled": false,
+    "debug": false,
+    "file": ""
+  },
+  "compaction": {
+    "customPrompt": true,
+    "maxContextTokens": 4000
+  },
+  "memoryInjection": {
+    "enabled": true,
+    "debug": false,
+    "maxTokens": 2000,
+    "cacheTtlMs": 30000
+  },
+  "messagesTransform": {
+    "enabled": true,
+    "debug": false
+  },
+  "executionModel": "",
+  "auditorModel": "",
+  // Per-agent overrides (temperature range: 0.0 - 2.0)
+  // "agents": {
+  //   "architect": { "temperature": 0.0 },
+  //   "librarian": { "temperature": 0.0 },
+  //   "auditor": { "temperature": 0.0 },
+  //   "code": {}
+  // },
+  "loop": {
+    "enabled": true,
+    "defaultMaxIterations": 15,
+    "cleanupWorktree": false,
+    "defaultAudit": true,
+    "model": "",
+    "minAudits": 1,
+    "stallTimeoutMs": 60000
+  },
+  "tui": {
+    "sidebar": true,
+    "showLoops": true,
+    "showVersion": true
+  }
+}
