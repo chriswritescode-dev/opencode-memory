@@ -36,4 +36,11 @@ if (!result.success) {
   process.exit(1)
 }
 
+console.log('Generating TUI type declarations...')
+const tuiDtsContent = `import type { TuiPluginModule } from '@opencode-ai/plugin/tui';
+declare const plugin: TuiPluginModule & { id: string };
+export default plugin;
+`
+writeFileSync(join(__dirname, '..', 'dist', 'tui.d.ts'), tuiDtsContent, 'utf-8')
+
 console.log('Build complete!')

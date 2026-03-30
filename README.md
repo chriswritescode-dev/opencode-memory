@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@opencode-manager/memory"><img src="https://img.shields.io/npm/v/@opencode-manager/memory" alt="npm" /></a>
   <a href="https://www.npmjs.com/package/@opencode-manager/memory"><img src="https://img.shields.io/npm/dm/@opencode-manager/memory" alt="npm downloads" /></a>
-  <a href="https://github.com/chriswritescode-dev/opencode-manager/blob/main/LICENSE"><img src="https://img.shields.io/github/license/chriswritescode-dev/opencode-manager" alt="License" /></a>
+  <a href="https://github.com/chriswritescode-dev/opencode-memory/blob/main/LICENSE"><img src="https://img.shields.io/github/license/chriswritescode-dev/opencode-memory" alt="License" /></a>
 </p>
 
 ## Quick Start
@@ -265,7 +265,13 @@ You can edit this file to customize settings. The file is created only if it doe
     "cleanupWorktree": false,
     "defaultAudit": true,
     "model": "",
-    "minAudits": 1
+    "minAudits": 1,
+    "stallTimeoutMs": 60000
+  },
+  "tui": {
+    "sidebar": true,
+    "showLoops": true,
+    "showVersion": true
   }
 }
 ```
@@ -343,6 +349,45 @@ When enabled, logs are written to the specified file with timestamps. The log fi
 #### Auditor
 - `auditorModel` - Model override for the auditor agent (`provider/model`). When set, overrides the auditor agent's default model. When not set, uses platform default (default: `""`)
 
+#### TUI
+- `tui.sidebar` - Show the memory sidebar widget in OpenCode TUI (default: `true`)
+- `tui.showLoops` - Display active and recent loop status in the sidebar (default: `true`)
+- `tui.showVersion` - Show plugin version number in the sidebar title (default: `true`)
+
+## TUI Plugin
+
+The plugin includes a TUI sidebar widget that displays active and recent loop status directly in the OpenCode terminal interface. The sidebar shows:
+
+- Loop name with colored status indicator (green = active/completed, yellow = auditing, red = error, muted = cancelled)
+- Current phase and iteration count for active loops
+- Clickable entries to switch to the loop's session
+
+### Setup
+
+When installed via npm, the TUI plugin loads automatically. For local development, add the built TUI file to your `~/.config/opencode/tui.json`:
+
+```json
+{
+  "plugin": [
+    "/path/to/opencode-memory/dist/tui.js"
+  ]
+}
+```
+
+TUI options are configured in `~/.config/opencode/memory-config.jsonc` under the `tui` key:
+
+```jsonc
+{
+  "tui": {
+    "sidebar": true,
+    "showLoops": true,
+    "showVersion": true
+  }
+}
+```
+
+Set `sidebar` to `false` to completely disable the widget.
+
 ## architect → code Workflow
 
 Plan with a smart model, execute with a fast model. The architect agent researches and designs; the code agent implements.
@@ -356,7 +401,7 @@ After the architect presents a plan, the user approves via one of four execution
 
 Set `executionModel` in your config to a fast model (e.g., Haiku) and use a smart model (e.g., Opus) for the architect session.
 
-See the [full workflow guide](https://chriswritescode-dev.github.io/opencode-manager/features/memory/#architect--code) for setup details.
+See the [full workflow guide](https://chriswritescode-dev.github.io/opencode-memory/features/memory/#architect--code) for setup details.
 
 ## Loop
 
@@ -387,11 +432,11 @@ The loop completes when the Code agent outputs the completion promise. It auto-t
 
 By default, loops run in an isolated git worktree. Set `inPlace: true` to run in the current directory instead (skips worktree creation, auto-commit, and cleanup).
 
-See the [full documentation](https://chriswritescode-dev.github.io/opencode-manager/features/memory/#loop) for details on worktree management, model configuration, and termination conditions.
+See the [full documentation](https://chriswritescode-dev.github.io/opencode-memory/features/memory/#loop) for details on worktree management, model configuration, and termination conditions.
 
 ## Documentation
 
-Full documentation available at [chriswritescode-dev.github.io/opencode-manager/features/memory](https://chriswritescode-dev.github.io/opencode-manager/features/memory/)
+Full documentation available at [chriswritescode-dev.github.io/opencode-memory/features/memory](https://chriswritescode-dev.github.io/opencode-memory/features/memory/)
 
 ## Development
 
