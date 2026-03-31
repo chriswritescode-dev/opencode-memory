@@ -87,6 +87,16 @@ const commands: Record<string, CommandModule> = {
       help()
     },
   },
+  container: {
+    cli: async (args, globalOpts) => {
+      const { cli } = await import('./container')
+      cli(args, globalOpts)
+    },
+    help: async () => {
+      const { help } = await import('./container')
+      help()
+    },
+  },
 }
 
 function printMainHelp(): void {
@@ -105,6 +115,7 @@ Commands:
   upgrade   Check for and install plugin updates
   status    Show loop status
   cancel    Cancel a loop
+  container Manage remote sandbox container
 
 Global Options:
   --db-path <path>       Path to memory database

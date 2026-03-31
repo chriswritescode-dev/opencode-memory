@@ -460,6 +460,74 @@ By default, loops run in an isolated git worktree. Set `inPlace: true` to run in
 
 See the [full documentation](https://chriswritescode-dev.github.io/opencode-memory/features/memory/#loop) for details on worktree management, model configuration, and termination conditions.
 
+## Remote Container Sandbox
+
+Run AI agent commands in an isolated Docker container via SSH. The plugin automatically syncs your project files and proxies all tool operations to the container.
+
+### Quick Start
+
+```bash
+# Generate SSH keys and create authorized_keys
+ocm-mem container setup
+
+# Start the sandbox container
+ocm-mem container up
+
+# Add the output config to your config.jsonc
+```
+
+### Manual Setup
+
+1. Build the container image:
+```bash
+docker build -t opencode-sandbox container/
+```
+
+2. Generate an SSH keypair (if you don't have one):
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/opencode-sandbox -N "" -C "opencode-sandbox"
+```
+
+3. Start the container:
+```bash
+docker run -d \
+  -p 2222:22 \
+  -v ~/.ssh/opencode-sandbox.pub:/home/devuser/.ssh/authorized_keys:ro \
+  -v sandbox-data:/projects \
+  --name opencode-sandbox \
+  opencode-sandbox
+```
+
+4. Add to your `config.jsonc`:
+```jsonc
+"remote": {
+  "enabled": true,
+  "host": "localhost",
+  "port": 2222,
+  "user": "devuser",
+  "keyPath": "~/.ssh/opencode-sandbox",
+  "basePath": "/projects"
+}
+```
+
+### Configuration Reference
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable remote container mode |
+| `host` | string | — | Container hostname or IP |
+| `port` | number | `22` | SSH port |
+| `user` | string | — | SSH username |
+| `keyPath` | string | — | Path to SSH private key |
+| `basePath` | string | `/projects` | Base path for project files on the container |
+| `excludeTools` | string[] | `[]` | Tool names to exclude from remote proxying |
+
+### Troubleshooting
+
+- **Connection refused**: Ensure the container is running and the port mapping is correct
+- **Permission denied**: Check that `authorized_keys` has mode 600 and the key path in config matches
+- **Git sync fails**: Ensure git is initialized in your local project directory
+
 ## Documentation
 
 Full documentation available at [chriswritescode-dev.github.io/opencode-memory/features/memory](https://chriswritescode-dev.github.io/opencode-memory/features/memory/)
