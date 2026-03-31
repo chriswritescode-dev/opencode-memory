@@ -48,5 +48,14 @@
     "sidebar": true,
     "showLoops": true,
     "showVersion": true
-  }
+  },
+  // Remote container sandbox (SSH)
+  // "remote": {
+  //   "enabled": false,
+  //   "host": "my-dev-container",
+  //   "port": 22,
+  //   "user": "root",
+  //   "basePath": "/projects",
+  //   "excludeTools": []
+  // }
 }

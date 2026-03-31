@@ -26,6 +26,8 @@ export interface InitState {
   syncComplete: boolean
 }
 
+import type { SshClient } from '../remote/ssh-client'
+
 export interface ToolContext {
   projectId: string
   directory: string
@@ -45,6 +47,7 @@ export interface ToolContext {
   getCurrentVec: () => VecService
   cleanup: () => Promise<void>
   input: PluginInput
+  sshClient?: SshClient | null
 }
 
 export function withDimensionWarning(mismatchState: DimensionMismatchState, result: string): string {

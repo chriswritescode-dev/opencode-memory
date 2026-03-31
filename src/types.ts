@@ -104,6 +104,16 @@ export interface AgentOverrideConfig {
   temperature?: number
 }
 
+export interface RemoteConfig {
+  enabled: boolean
+  host: string
+  port?: number
+  user?: string
+  keyPath?: string
+  basePath?: string
+  excludeTools?: string[]
+}
+
 export interface PluginConfig {
   dataDir?: string
   embedding: EmbeddingConfig
@@ -120,6 +130,7 @@ export interface PluginConfig {
   defaultKvTtlMs?: number
   tui?: TuiConfig
   agents?: Record<string, AgentOverrideConfig>
+  remote?: RemoteConfig
 }
 
 export interface HealthStatus {
@@ -132,6 +143,11 @@ export interface HealthStatus {
   currentModel: { model: string; dimensions: number } | null
   needsReindex: boolean
   overallStatus: 'ok' | 'degraded' | 'error'
+  remote?: {
+    connected: boolean
+    host: string
+    projectDir: string
+  } | null
 }
 
 export type ExportFormat = 'json' | 'markdown'

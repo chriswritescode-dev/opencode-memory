@@ -11,6 +11,7 @@ import { createMetadataQuery } from '../storage'
 import { checkForUpdate, formatUpgradeCheck, performUpgrade } from '../utils/upgrade'
 import type { VecService } from '../storage/vec-types'
 import type { MemoryService } from '../services/memory'
+import type { SshClient } from '../remote/ssh-client'
 
 const z = tool.schema
 
@@ -20,6 +21,7 @@ async function getHealthStatus(
   config: PluginConfig,
   provider: EmbeddingProvider,
   dataDir: string,
+  sshClient: SshClient | null | undefined,
 ): Promise<HealthStatus> {
   const socketPath = join(dataDir, 'embedding.sock')
 
@@ -77,6 +79,32 @@ async function getHealthStatus(
       ? 'degraded'
       : 'ok'
 
+  let remote: { connected: boolean; host: string; projectDir: string } | null = null
+  if (sshClient && config.remote?.enabled) {
+    try {
+      const healthy = await sshClient.healthCheck()
+      if (healthy) {
+        remote = {
+          connected: true,
+          host: config.remote.host,
+          projectDir: sshClient.getProjectDir(projectId),
+        }
+      } else {
+        remote = {
+          connected: false,
+          host: config.remote.host,
+          projectDir: sshClient.getProjectDir(projectId),
+        }
+      }
+    } catch {
+      remote = {
+        connected: false,
+        host: config.remote.host,
+        projectDir: sshClient.getProjectDir(projectId),
+      }
+    }
+  }
+
   return {
     dbStatus,
     memoryCount,
@@ -87,11 +115,12 @@ async function getHealthStatus(
     currentModel,
     needsReindex,
     overallStatus,
+    remote,
   }
 }
 
 function formatHealthStatus(status: HealthStatus, provider: EmbeddingProvider): string {
-  const { dbStatus, memoryCount, operational, serverRunning, serverHealth, configuredModel, currentModel, needsReindex, overallStatus } = status
+  const { dbStatus, memoryCount, operational, serverRunning, serverHealth, configuredModel, currentModel, needsReindex, overallStatus, remote } = status
 
   const embeddingStatus: 'ok' | 'error' = operational ? 'ok' : 'error'
 
@@ -126,6 +155,13 @@ function formatHealthStatus(status: HealthStatus, provider: EmbeddingProvider): 
     lines.push('  In sync')
   }
 
+  if (remote) {
+    lines.push('')
+    lines.push(`Remote: ${remote.connected ? 'connected' : 'disconnected'}`)
+    lines.push(`  Host: ${remote.host}`)
+    lines.push(`  Project dir: ${remote.projectDir}`)
+  }
+
   return lines.join('\n')
 }
 
@@ -135,8 +171,9 @@ async function executeHealthCheck(
   config: PluginConfig,
   provider: EmbeddingProvider,
   dataDir: string,
+  sshClient: SshClient | null | undefined,
 ): Promise<string> {
-  const status = await getHealthStatus(projectId, db, config, provider, dataDir)
+  const status = await getHealthStatus(projectId, db, config, provider, dataDir, sshClient)
   return formatHealthStatus(status, provider)
 }
 
@@ -208,8 +245,9 @@ export async function autoValidateOnLoad(
   mismatchState: DimensionMismatchState,
   vec: VecService,
   logger: { log: (message: string) => void },
+  sshClient: SshClient | null | undefined,
 ): Promise<void> {
-  const status = await getHealthStatus(projectId, db, config, provider, dataDir)
+  const status = await getHealthStatus(projectId, db, config, provider, dataDir, sshClient)
 
   if (status.overallStatus === 'error') {
     logger.log('Auto-validate: unhealthy (db error), skipping')
@@ -232,7 +270,7 @@ export async function autoValidateOnLoad(
 }
 
 export function createHealthTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const { projectId, db, config, provider, dataDir, memoryService, logger, cleanup, input, mismatchState, initState } = ctx
+  const { projectId, db, config, provider, dataDir, memoryService, logger, cleanup, input, mismatchState, initState, sshClient } = ctx
   const getCurrentVec = ctx.getCurrentVec
 
   return {
@@ -269,7 +307,7 @@ export function createHealthTools(ctx: ToolContext): Record<string, ReturnType<t
           return executeReindex(projectId, memoryService, db, config, provider, mismatchState, getCurrentVec())
         }
         const [healthResult, updateCheck] = await Promise.all([
-          executeHealthCheck(projectId, db, config, provider, dataDir),
+          executeHealthCheck(projectId, db, config, provider, dataDir, sshClient),
           checkForUpdate(),
         ])
         const versionLine = formatUpgradeCheck(updateCheck)

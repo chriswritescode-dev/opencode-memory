@@ -3,7 +3,7 @@ import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
 import { resolveDataDir, resolveLogPath } from './storage'
-import type { PluginConfig, EmbeddingConfig } from './types'
+import type { PluginConfig, EmbeddingConfig, RemoteConfig } from './types'
 import { parse as parseJsoncLib, type ParseError } from 'jsonc-parser'
 
 function resolveBundledConfigPath(): string {
@@ -85,6 +85,11 @@ function isValidPluginConfig(config: unknown): config is PluginConfig {
 
   if (typeof embedding.model !== 'string') return false
 
+  const remote = obj.remote as Record<string, unknown> | undefined
+  if (remote?.enabled === true && !remote.host) {
+    return false
+  }
+
   return true
 }
 
@@ -126,6 +131,17 @@ export function loadPluginConfig(): PluginConfig {
   }
 }
 
+function normalizeRemoteConfig(remote: RemoteConfig | undefined): RemoteConfig | undefined {
+  if (!remote) return undefined
+  
+  return {
+    ...remote,
+    port: remote.port ?? 22,
+    user: remote.user ?? 'root',
+    basePath: remote.basePath ?? '/projects',
+  }
+}
+
 function normalizeConfig(config: PluginConfig): PluginConfig {
   const normalized: PluginConfig = {
     dataDir: config.dataDir,
@@ -141,6 +157,7 @@ function normalizeConfig(config: PluginConfig): PluginConfig {
     loop: config.loop ?? config.ralph,
     tui: config.tui,
     agents: config.agents,
+    remote: normalizeRemoteConfig(config.remote),
   }
   
   if (config.ralph && !config.loop) {

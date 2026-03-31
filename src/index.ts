@@ -18,6 +18,9 @@ import type { PluginConfig, CompactionConfig } from './types'
 import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad, scopeEnum } from './tools'
 import type { DimensionMismatchState, InitState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
+import { createSshClient, type SshClient } from './remote/ssh-client'
+import { createGitSyncManager, type GitSyncManager } from './remote/git-sync'
+import { createRemoteTools } from './remote/tools'
 
 
 export function createMemoryPlugin(config: PluginConfig): Plugin {
@@ -45,6 +48,41 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       debug: loggingConfig?.debug ?? false,
     })
     logger.log(`Initializing plugin for directory: ${directory}, projectId: ${projectId}`)
+
+    let sshClient: SshClient | null = null
+    let gitSync: GitSyncManager | null = null
+    let remoteTools: Record<string, any> | null = null
+
+    if (config.remote?.enabled) {
+      try {
+        sshClient = createSshClient(config.remote, logger)
+        const healthy = await sshClient.healthCheck()
+        if (!healthy) {
+          logger.error('Remote container health check failed, continuing without remote')
+          sshClient = null
+        }
+      } catch (err) {
+        logger.error('Failed to initialize SSH client', err)
+        sshClient = null
+      }
+
+      if (sshClient) {
+        const syncManager = createGitSyncManager(sshClient, projectId, directory, logger)
+        try {
+          await syncManager.initializeAndSync()
+          gitSync = syncManager
+          logger.log('Remote: initialization complete')
+        } catch (err) {
+          logger.error('Remote git sync initialization failed', err)
+        }
+
+        const allRemoteTools = createRemoteTools(sshClient, projectId, logger)
+        const excludeSet = new Set(config.remote.excludeTools ?? [])
+        remoteTools = Object.fromEntries(
+          Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
+        )
+      }
+    }
 
     const provider = createEmbeddingProvider(config.embedding)
     provider.warmup()
@@ -119,7 +157,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           () => {
             initState.syncRunning = false
             initState.syncComplete = true
-            autoValidateOnLoad(projectId, memoryService, db, config, provider, dataDir, mismatchState, currentVec, logger)
+            autoValidateOnLoad(projectId, memoryService, db, config, provider, dataDir, mismatchState, currentVec, logger, sshClient)
               .catch((err: unknown) => {
                 logger.error('Auto-validate failed', err)
               })
@@ -188,9 +226,13 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       getCurrentVec: () => currentVec,
       cleanup,
       input,
+      sshClient,
     }
 
     const tools = createTools(ctx)
+    if (remoteTools) {
+      Object.assign(tools, remoteTools)
+    }
     const toolExecuteBeforeHook = createToolExecuteBeforeHook(ctx)
     const toolExecuteAfterHook = createToolExecuteAfterHook(ctx)
 
@@ -211,6 +253,11 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         if (eventInput.event?.type === 'server.instance.disposed') {
           cleanup()
           return
+        }
+        if (gitSync && eventInput.event?.type === 'session.idle') {
+          gitSync.autoCommitAndPull().catch((err: unknown) => {
+            logger.error('Remote git sync on idle failed', err)
+          })
         }
         await loopHandler.onEvent(eventInput)
         await sessionHooks.onEvent(eventInput)
@@ -300,6 +347,21 @@ You MUST always present your plan to the user for explicit approval before proce
 </system-reminder>`,
           synthetic: true,
         })
+      },
+      'experimental.chat.system.transform': async (
+        _input: { sessionID?: string; model: unknown },
+        output: { system: string[] }
+      ) => {
+        if (sshClient && config.remote?.enabled) {
+          const projectDir = sshClient.getProjectDir(projectId)
+          output.system.push([
+            '## Remote Container Integration',
+            'This session executes commands in a remote container via SSH.',
+            `Project directory: ${projectDir}`,
+            'All bash commands and file operations run on the remote container.',
+            'Do NOT reference local file paths — use paths relative to the project directory.',
+          ].join('\n'))
+        }
       },
     } as Hooks & { getCleanup: () => Promise<void> }
   }
