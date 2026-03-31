@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui'
-import { createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
 import { readFileSync, existsSync } from 'fs'
 import { homedir, platform } from 'os'
 import { join } from 'path'
@@ -95,7 +95,7 @@ function readLoopStates(projectId: string): LoopInfo[] {
           completedAt: state.completedAt,
           terminationReason: state.terminationReason,
           worktreeBranch: state.worktreeBranch,
-          worktree: state.worktree,
+          worktree: state.worktree ?? false,
           worktreeDir: state.worktreeDir,
         })
       } catch {}
@@ -106,6 +106,70 @@ function readLoopStates(projectId: string): LoopInfo[] {
   } finally {
     try { db?.close() } catch {}
   }
+}
+
+function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
+  const theme = () => props.api.theme.current
+  const loop = props.loop
+
+  const options = () => {
+    const opts: Array<{ title: string; value: string; description?: string; onSelect?: () => void }> = []
+
+    if (loop.worktreeBranch) {
+      opts.push({
+        title: `Branch: ${loop.worktreeBranch}`,
+        value: 'branch',
+        description: loop.worktreeDir,
+      })
+    }
+
+    if (loop.active) {
+      const max = loop.maxIterations > 0 ? `/${loop.maxIterations}` : ''
+      opts.push({
+        title: `Status: ${loop.phase} · iteration ${loop.iteration}${max}`,
+        value: 'status',
+      })
+      opts.push({
+        title: 'Cancel loop',
+        value: 'cancel',
+        description: `Cancel ${loop.name}`,
+        onSelect: () => {
+          props.api.ui.dialog.clear()
+          props.api.ui.toast({
+            message: `Type /cancel-loop ${loop.name} to cancel`,
+            variant: 'info',
+            duration: 5000,
+          })
+        },
+      })
+    } else if (loop.terminationReason === 'completed') {
+      opts.push({
+        title: `Completed: ${loop.iteration} iteration${loop.iteration !== 1 ? 's' : ''}`,
+        value: 'completed',
+      })
+    } else {
+      opts.push({
+        title: `Ended: ${loop.terminationReason?.replace(/_/g, ' ') ?? 'unknown'}`,
+        value: 'ended',
+      })
+    }
+
+    return opts
+  }
+
+  return (
+    <props.api.ui.DialogSelect
+      title={loop.name}
+      options={options()}
+      onSelect={(opt) => {
+        if (opt.onSelect) {
+          opt.onSelect()
+          return
+        }
+        props.api.ui.dialog.clear()
+      }}
+    />
+  )
 }
 
 function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
@@ -158,10 +222,36 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
     refreshLoops()
   })
 
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+
+  function startPolling() {
+    if (pollTimer) return
+    pollTimer = setInterval(() => {
+      refreshLoops()
+    }, 5000)
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  }
+
   refreshLoops()
+
+  createEffect(() => {
+    const hasActiveWorktreeLoops = loops().filter(l => l.active && l.worktree).length > 0
+    if (hasActiveWorktreeLoops) {
+      startPolling()
+    } else {
+      stopPolling()
+    }
+  })
 
   onCleanup(() => {
     unsub()
+    stopPolling()
   })
 
   const hasContent = createMemo(() => {
@@ -196,10 +286,15 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
                 flexDirection="row"
                 gap={1}
                 onMouseDown={() => {
-                  props.api.client.tui.selectSession({
-                    sessionID: loop.sessionId,
-                    ...(loop.worktreeDir ? { directory: loop.worktreeDir } : {}),
-                  }).catch(() => {})
+                  if (loop.worktree) {
+                    queueMicrotask(() => {
+                      props.api.ui.dialog.replace(() => (
+                        <LoopDetailsDialog api={props.api} loop={loop} />
+                      ))
+                    })
+                  } else {
+                    props.api.route.navigate('session', { sessionID: loop.sessionId })
+                  }
                 }}
               >
                 <text flexShrink={0} style={{ fg: dot(loop) }}>•</text>
@@ -231,6 +326,65 @@ const tui: TuiPlugin = async (api) => {
   }
 
   if (!opts.sidebar) return
+
+  api.command.register(() => {
+    const directory = api.state.path.directory
+    const pid = resolveProjectId(directory)
+    if (!pid) return []
+
+    const states = readLoopStates(pid)
+    if (states.length === 0) return []
+
+    return [
+      {
+        title: 'Memory: Show loops',
+        value: 'memory.loops.show',
+        description: `${states.length} loop${states.length !== 1 ? 's' : ''}`,
+        category: 'Memory',
+        onSelect: () => {
+          const loopOptions = states.map(l => {
+            const active = l.active
+            const max = l.maxIterations > 0 ? `/${l.maxIterations}` : ''
+            const status = active
+              ? `${l.phase} · iter ${l.iteration}${max}`
+              : l.terminationReason === 'completed'
+                ? `completed · ${l.iteration} iter${l.iteration !== 1 ? 's' : ''}`
+                : l.terminationReason?.replace(/_/g, ' ') ?? 'ended'
+
+            return {
+              title: l.name,
+              value: l.name,
+              description: `${status}${l.worktreeBranch ? ` · ${l.worktreeBranch}` : ''}`,
+              onSelect: () => {
+                api.ui.dialog.clear()
+                if (l.worktree) {
+                  api.ui.dialog.replace(() => (
+                    <LoopDetailsDialog api={api} loop={l} />
+                  ))
+                } else {
+                  api.route.navigate('session', { sessionID: l.sessionId })
+                }
+              },
+            }
+          })
+
+          api.ui.dialog.replace(() => (
+            <api.ui.DialogSelect
+              title="Loops"
+              options={loopOptions}
+              onSelect={(opt) => {
+                if (opt.onSelect) {
+                  opt.onSelect()
+                  return
+                }
+                api.ui.dialog.clear()
+              }}
+            />
+          ))
+        },
+      },
+    ]
+  })
 
   api.slots.register({
     order: 150,
