@@ -108,6 +108,44 @@ function readLoopStates(projectId: string): LoopInfo[] {
   }
 }
 
+function cancelLoop(projectId: string, loopName: string): string | null {
+  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
+  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
+  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
+
+  if (!existsSync(dbPath)) return null
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath)
+    const key = `loop:${loopName}`
+    const now = Date.now()
+    const row = db.prepare('SELECT data, project_id FROM project_kv WHERE project_id = ? AND key = ? AND expires_at > ?').get(projectId, key, now) as { data: string; project_id: string } | null
+    if (!row) return null
+
+    const state = JSON.parse(row.data)
+    if (!state.active) return null
+
+    const updatedState = {
+      ...state,
+      active: false,
+      completedAt: new Date().toISOString(),
+      terminationReason: 'cancelled',
+    }
+    db.prepare('UPDATE project_kv SET data = ?, updated_at = ? WHERE project_id = ? AND key = ?').run(
+      JSON.stringify(updatedState),
+      now,
+      projectId,
+      key,
+    )
+    return state.sessionId ?? null
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
 function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
   const theme = () => props.api.theme.current
   const loop = props.loop
@@ -135,10 +173,17 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
         description: `Cancel ${loop.name}`,
         onSelect: () => {
           props.api.ui.dialog.clear()
+          const directory = props.api.state.path.directory
+          const pid = resolveProjectId(directory)
+          if (!pid) return
+          const sessionId = cancelLoop(pid, loop.name)
+          if (sessionId) {
+            props.api.client.session.abort({ sessionID: sessionId }).catch(() => {})
+          }
           props.api.ui.toast({
-            message: `Type /cancel-loop ${loop.name} to cancel`,
-            variant: 'info',
-            duration: 5000,
+            message: sessionId ? `Cancelled loop: ${loop.name}` : `Loop ${loop.name} is not active`,
+            variant: sessionId ? 'success' : 'info',
+            duration: 3000,
           })
         },
       })
