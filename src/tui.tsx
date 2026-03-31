@@ -285,13 +285,11 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
               <box
                 flexDirection="row"
                 gap={1}
-                onMouseDown={() => {
+                onMouseUp={() => {
                   if (loop.worktree) {
-                    queueMicrotask(() => {
-                      props.api.ui.dialog.replace(() => (
-                        <LoopDetailsDialog api={props.api} loop={loop} />
-                      ))
-                    })
+                    props.api.ui.dialog.replace(() => (
+                      <LoopDetailsDialog api={props.api} loop={loop} />
+                    ))
                   } else {
                     props.api.route.navigate('session', { sessionID: loop.sessionId })
                   }
