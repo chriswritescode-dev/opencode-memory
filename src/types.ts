@@ -67,6 +67,7 @@ export interface LoopConfig {
   model?: string
   stallTimeoutMs?: number
   minAudits?: number
+  reuseSession?: boolean
 }
 
 export interface ListMemoriesFilter {

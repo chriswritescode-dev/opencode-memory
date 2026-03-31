@@ -308,6 +308,32 @@ export function createLoopEventHandler(
   }
 
   async function rotateSession(worktreeName: string, state: LoopState): Promise<string> {
+    const currentConfig = getConfig()
+
+    if (currentConfig.loop?.reuseSession) {
+      try {
+        const messagesResult = await v2Client.session.messages({
+          sessionID: state.sessionId,
+          directory: state.worktreeDir,
+        })
+        const messages = (messagesResult.data ?? []) as Array<{ info: { id: string } }>
+        for (const msg of messages) {
+          await v2Client.session.deleteMessage({
+            sessionID: state.sessionId,
+            messageID: msg.info.id,
+            directory: state.worktreeDir,
+          })
+        }
+        logger.log(`Loop: cleared ${messages.length} messages from session ${state.sessionId} (reuseSession mode)`)
+      } catch (err) {
+        logger.error(`Loop: failed to clear messages, session may have stale context`, err)
+      }
+
+      stopWatchdog(worktreeName)
+      startWatchdog(worktreeName)
+      return state.sessionId
+    }
+
     const oldSessionId = state.sessionId
 
     const createParams = {
