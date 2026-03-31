@@ -37,6 +37,7 @@ The local embedding model downloads automatically on install. For API-based embe
 - **Bundled Agents** - Ships with Code, Architect, Auditor and Librarian agents preconfigured for memory-aware workflows
 - **CLI Tools** - Export, import, list, stats, cleanup, upgrade, status, and cancel commands via `ocm-mem` binary
 - **Dimension Mismatch Detection** - Detects embedding model changes and guides recovery via reindex
+- **Iterative Development Loops** - Autonomous coding/auditing loop with worktree isolation, session rotation, stall detection, and review finding persistence
 
 ## Agents
 
@@ -424,7 +425,32 @@ Audit findings survive session rotation via the **KV store**. The auditor stores
 - Resolved findings are deleted
 - Unresolved findings are carried forward into the review
 
-This ensures review findings are never lost between iterations, even as sessions rotate.
+### Worktree Isolation
+
+By default, loops run in an isolated git worktree with their own branch (e.g., `opencode/loop-<slug>`). On completion, changes are auto-committed and the worktree is removed (branch preserved for later merge). Set `worktree: false` to run in the current directory instead (skips worktree creation, auto-commit, and cleanup).
+
+### Auditor Integration
+
+After each coding iteration, the auditor agent reviews changes against project conventions and stored review findings. Findings are persisted as `review-finding:` KV entries scoped to the loop's branch. Outstanding findings block completion, and a minimum audit count (`minAudits`, default: `1`) must be met before the completion promise is honored.
+
+### Stall Detection
+
+A watchdog monitors loop activity. If no progress is detected within `stallTimeoutMs` (default: 60s), the current phase is re-triggered. After 5 consecutive stalls, the loop terminates with reason `stall_timeout`.
+
+### Model Configuration
+
+Loops use `loop.model` if set, falling back to `executionModel`, then the platform default. On model errors, automatic fallback to the default model kicks in.
+
+### Safety
+
+- `git push` is denied inside active loop sessions
+- Tools like `question`, `memory-plan-execute`, and `memory-loop` are blocked to prevent recursive loops and keep execution autonomous
+
+### Management
+
+- **Slash commands**: `/loop` to start, `/cancel-loop` to cancel
+- **Tools**: `memory-loop-status` for checking progress (with restart capability)
+- **CLI**: `ocm-mem status` and `ocm-mem cancel` for loop management
 
 ### Completion and Termination
 
