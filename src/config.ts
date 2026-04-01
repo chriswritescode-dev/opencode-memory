@@ -94,6 +94,7 @@ export function createConfigHandler(
   agentOverrides?: Record<string, { temperature?: number }>
 ) {
   return async (config: Record<string, unknown>) => {
+
     const effectiveAgents = { ...agents }
     if (agentOverrides) {
       for (const [name, overrides] of Object.entries(agentOverrides)) {

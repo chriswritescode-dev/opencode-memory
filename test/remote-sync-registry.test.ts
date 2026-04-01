@@ -1,8 +1,9 @@
-import { describe, test, expect, mock } from 'bun:test'
+import { describe, test, expect, mock, beforeEach } from 'bun:test'
 import { createRemoteSyncRegistry } from '../src/remote/sync-registry'
 import { createSshClient } from '../src/remote/ssh-client'
+import * as mutagenSync from '../src/remote/mutagen-sync'
 import type { RemoteConfig, Logger } from '../src/types'
-import type { GitSyncManager } from '../src/remote/git-sync'
+import type { SyncManager } from '../src/remote/mutagen-sync'
 
 describe('RemoteSyncRegistry', () => {
   const mockLogger: Logger = {
@@ -11,32 +12,41 @@ describe('RemoteSyncRegistry', () => {
     debug: mock(() => {}),
   }
 
-  const mockSshClient = createSshClient({ enabled: true, host: 'test-host' } as RemoteConfig, mockLogger)
+  const mockConfig: RemoteConfig = { enabled: true, host: 'test-host' }
+  const mockSshClient = createSshClient(mockConfig, mockLogger)
 
-  const mockSyncManager: GitSyncManager = {
+  const mockSyncManager: SyncManager = {
     initializeAndSync: mock(async () => {}),
-    autoCommitAndPull: mock(async () => true),
+    flush: mock(async () => {}),
+    terminate: mock(async () => {}),
   }
 
+  beforeEach(() => {
+    mock.module('../src/remote/mutagen-sync', () => ({
+      ...mutagenSync,
+      createMutagenSyncManager: mock(() => mockSyncManager),
+    }))
+  })
+
   test('getDefault returns the default sync manager', () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     expect(registry.getDefault()).toBe(mockSyncManager)
   })
 
   test('getForWorktree returns null when not registered', () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     expect(registry.getForWorktree('loop-test')).toBeNull()
   })
 
   test('registerWorktree stores and returns a sync manager', async () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     const result = await registry.registerWorktree('loop-test', '/local/dir')
     expect(result).toBeDefined()
     expect(registry.getForWorktree('loop-test')).toBe(result)
   })
 
   test('unregisterWorktree removes the sync manager', async () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     await registry.registerWorktree('loop-test', '/local/dir')
     expect(registry.getForWorktree('loop-test')).not.toBeNull()
     registry.unregisterWorktree('loop-test')
@@ -44,7 +54,7 @@ describe('RemoteSyncRegistry', () => {
   })
 
   test('resolveForSession returns default for non-loop sessions', () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     const resolveWorktreeName = mock(() => null)
     const getWorktreeState = mock(() => null)
     const result = registry.resolveForSession('session-123', resolveWorktreeName, getWorktreeState)
@@ -52,7 +62,7 @@ describe('RemoteSyncRegistry', () => {
   })
 
   test('resolveForSession returns default when state has worktree: false', () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     const resolveWorktreeName = mock(() => 'loop-test')
     const getWorktreeState = mock(() => ({ worktree: false }))
     const result = registry.resolveForSession('session-123', resolveWorktreeName, getWorktreeState)
@@ -60,7 +70,7 @@ describe('RemoteSyncRegistry', () => {
   })
 
   test('resolveForSession returns worktree sync when state has worktree: true', async () => {
-    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(mockSshClient, mockSyncManager, mockLogger, mockConfig)
     const syncManager = await registry.registerWorktree('loop-test', '/local/dir')
     const resolveWorktreeName = mock(() => 'loop-test')
     const getWorktreeState = mock(() => ({ worktree: true }))
@@ -68,13 +78,13 @@ describe('RemoteSyncRegistry', () => {
     expect(result).toBe(syncManager)
   })
 
-  test('cleanupRemoteWorktree calls sshClient.exec with rm -rf', async () => {
+  test('cleanupRemoteWorktree terminates sync and calls sshClient.exec with rm -rf', async () => {
     const execMock = mock(async () => ({ exitCode: 0, stdout: '', stderr: '' }))
     const testSshClient = {
       ...mockSshClient,
       exec: execMock,
     }
-    const registry = createRemoteSyncRegistry(testSshClient, mockSyncManager, mockLogger)
+    const registry = createRemoteSyncRegistry(testSshClient, mockSyncManager, mockLogger, mockConfig)
     await registry.registerWorktree('loop-test', '/local/dir')
     await registry.cleanupRemoteWorktree('loop-test')
     expect(execMock).toHaveBeenCalledWith('rm -rf "/projects/worktrees/loop-test"')

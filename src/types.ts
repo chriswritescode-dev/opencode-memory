@@ -112,6 +112,7 @@ export interface RemoteConfig {
   keyPath?: string
   basePath?: string
   excludeTools?: string[]
+  disableLsp?: boolean
 }
 
 export interface PluginConfig {

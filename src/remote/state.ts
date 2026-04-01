@@ -1,5 +1,5 @@
 import type { SshClient } from './ssh-client'
-import type { GitSyncManager } from './git-sync'
+import type { SyncManager } from './mutagen-sync'
 import type { RemoteSyncRegistry } from './sync-registry'
 import type { Logger } from '../types'
 
@@ -12,7 +12,7 @@ export interface RemoteState {
 
 export interface RemoteStateManager {
   isEnabled(): boolean
-  enable(sshClient: SshClient, gitSync: GitSyncManager, syncRegistry: RemoteSyncRegistry): void
+  enable(sshClient: SshClient, syncManager: SyncManager, syncRegistry: RemoteSyncRegistry): void
   disable(): Promise<void>
   toggle(currentSshClient?: SshClient): Promise<boolean>
   getState(): RemoteState
@@ -25,7 +25,7 @@ export function createRemoteStateManager(
 ): RemoteStateManager {
   let enabled = initialEnabled
   let sshClient: SshClient | null = null
-  let gitSync: GitSyncManager | null = null
+  let syncManager: SyncManager | null = null
   let syncRegistry: RemoteSyncRegistry | null = null
   let host: string | undefined
   let projectDir: string | undefined
@@ -35,10 +35,10 @@ export function createRemoteStateManager(
       return enabled
     },
 
-    enable(client: SshClient, syncManager: GitSyncManager, registry: RemoteSyncRegistry) {
+    enable(client: SshClient, manager: SyncManager, registry: RemoteSyncRegistry) {
       enabled = true
       sshClient = client
-      gitSync = syncManager
+      syncManager = manager
       syncRegistry = registry
       logger.log('Remote: enabled')
     },
@@ -46,7 +46,7 @@ export function createRemoteStateManager(
     async disable() {
       enabled = false
       sshClient = null
-      gitSync = null
+      syncManager = null
       syncRegistry = null
       logger.log('Remote: disabled')
     },
@@ -55,9 +55,8 @@ export function createRemoteStateManager(
       enabled = !enabled
       if (!enabled) {
         sshClient = null
-        gitSync = null
+        syncManager = null
         syncRegistry = null
-        logger.log('Remote: toggled off')
       }
       logger.log(`Remote: toggled ${enabled ? 'on' : 'off'}`)
       return enabled

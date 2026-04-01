@@ -20,7 +20,7 @@ import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, a
 import type { DimensionMismatchState, InitState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
 import { createSshClient, type SshClient } from './remote/ssh-client'
-import { createGitSyncManager, type GitSyncManager } from './remote/git-sync'
+import { createMutagenSyncManager, type SyncManager, checkMutagenInstalled } from './remote/mutagen-sync'
 import { createRemoteTools } from './remote/tools'
 import { createRemoteSyncRegistry, type RemoteSyncRegistry } from './remote/sync-registry'
 import { createRemoteStateManager, type RemoteStateManager } from './remote/state'
@@ -53,7 +53,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     logger.log(`Initializing plugin for directory: ${directory}, projectId: ${projectId}`)
 
     let sshClient: SshClient | null = null
-    let gitSync: GitSyncManager | null = null
+    let syncManager: SyncManager | null = null
     let remoteTools: Record<string, any> | null = null
     let syncRegistry: RemoteSyncRegistry | null = null
     let remoteStateManager: RemoteStateManager | null = null
@@ -75,44 +75,52 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       }
 
       if (sshClient) {
-        const syncManager = createGitSyncManager(
-          sshClient,
-          sshClient.getProjectDir(projectId),
-          directory,
-          projectId,
-          logger,
-        )
-        try {
-          await syncManager.initializeAndSync()
-          gitSync = syncManager
-          logger.log('Remote: initialization complete')
-        } catch (err) {
-          logger.error('Remote git sync initialization failed', err)
+        if (!checkMutagenInstalled()) {
+          logger.error('Mutagen is not installed. Install with: brew install mutagen-io/mutagen/mutagen')
+          sshClient = null
+        } else {
+          const mutagenSyncManager = createMutagenSyncManager(
+            config.remote,
+            directory,
+            sshClient.getProjectDir(projectId),
+            `opencode-${projectId}`,
+            logger,
+            sshClient,
+          )
+          try {
+            await mutagenSyncManager.initializeAndSync()
+            syncManager = mutagenSyncManager
+            logger.log('Remote: initial sync complete')
+          } catch (err) {
+            logger.error('Remote mutagen sync initialization failed', err)
+          }
+
+          if (syncManager) {
+            syncRegistry = createRemoteSyncRegistry(sshClient, syncManager, logger, config.remote)
+            remoteStateManager.setConnectionInfo(config.remote.host, sshClient.getProjectDir(projectId))
+            remoteStateManager.enable(sshClient, syncManager, syncRegistry)
+          }
         }
 
-        if (gitSync) {
-          syncRegistry = createRemoteSyncRegistry(sshClient, syncManager, logger)
-          remoteStateManager.setConnectionInfo(config.remote.host, sshClient.getProjectDir(projectId))
-          remoteStateManager.enable(sshClient, gitSync, syncRegistry)
+        if (sshClient) {
+          const allRemoteTools = createRemoteTools(
+            sshClient,
+            sshClient.getProjectDir(projectId),
+            logger,
+            (sessionId: string) => {
+              const wtName = loopService.resolveWorktreeName(sessionId)
+              if (!wtName) return undefined
+              const state = loopService.getActiveState(wtName)
+              if (!state?.worktree) return undefined
+              return sshClient!.getWorktreeDir(wtName)
+            },
+            remoteStateManager
+          )
+          const excludeSet = new Set(config.remote.excludeTools ?? [])
+          remoteTools = Object.fromEntries(
+            Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
+          )
         }
-
-        const allRemoteTools = createRemoteTools(
-          sshClient,
-          sshClient.getProjectDir(projectId),
-          logger,
-          (sessionId: string) => {
-            const wtName = loopService.resolveWorktreeName(sessionId)
-            if (!wtName) return undefined
-            const state = loopService.getActiveState(wtName)
-            if (!state?.worktree) return undefined
-            return sshClient!.getWorktreeDir(wtName)
-          },
-          remoteStateManager
-        )
-        const excludeSet = new Set(config.remote.excludeTools ?? [])
-        remoteTools = Object.fromEntries(
-          Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
-        )
       }
     }
 
@@ -147,6 +155,9 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     const reconciledCount = loopService.reconcileStale()
     if (reconciledCount > 0) {
       logger.log(`Reconciled ${reconciledCount} stale loop(s) from previous session`)
+    }
+    if (remoteStateManager) {
+      kvService.set(projectId, 'remote:state', remoteStateManager.getState())
     }
     const loopHandler = createLoopEventHandler(loopService, client, v2, logger, () => config, syncRegistry)
 
@@ -227,6 +238,10 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       
       loopHandler.clearAllRetryTimeouts()
       
+      if (syncManager) {
+        try { await syncManager.terminate() } catch {}
+      }
+      
       memoryInjection.destroy()
       await memoryService.destroy()
       closeDatabase(db)
@@ -296,6 +311,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           }
           
           await remoteStateManager.toggle()
+          kvService.set(projectId, 'remote:state', remoteStateManager.getState())
           return `Remote ${newState ? 'enabled' : 'disabled'}`
         },
       })
@@ -308,6 +324,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         },
       })
     }
+
     const toolExecuteBeforeHook = createToolExecuteBeforeHook(ctx)
     const toolExecuteAfterHook = createToolExecuteAfterHook(ctx)
 
@@ -318,7 +335,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         config.auditorModel
           ? { ...agents, auditor: { ...agents.auditor, defaultModel: config.auditorModel } }
           : agents,
-        config.agents
+        config.agents,
       ),
       'chat.message': async (input, output) => {
         await sessionHooks.onMessage(input, output)
@@ -332,22 +349,16 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         if (syncRegistry && eventInput.event?.type === 'session.idle') {
           const sessionId = (eventInput.event.properties as Record<string, unknown>)?.sessionID as string
           if (sessionId) {
-            const syncManager = syncRegistry.resolveForSession(
+            const sessionSyncManager = syncRegistry.resolveForSession(
               sessionId,
               (sid) => loopService.resolveWorktreeName(sid),
               (name) => loopService.getActiveState(name),
             )
             try {
-              await syncManager.autoCommitAndPull()
+              await sessionSyncManager.flush()
             } catch (err) {
-              logger.error('Remote git sync on idle failed', err)
+              logger.error('Remote mutagen sync flush on idle failed', err)
             }
-          }
-        } else if (gitSync && eventInput.event?.type === 'session.idle') {
-          try {
-            await gitSync.autoCommitAndPull()
-          } catch (err) {
-            logger.error('Remote git sync on idle failed', err)
           }
         }
         await loopHandler.onEvent(eventInput)
@@ -438,36 +449,6 @@ You MUST always present your plan to the user for explicit approval before proce
 </system-reminder>`,
           synthetic: true,
         })
-      },
-      'experimental.chat.system.transform': async (
-        _input: { sessionID?: string; model: unknown },
-        output: { system: string[] }
-      ) => {
-        if (sshClient && config.remote?.enabled) {
-          const projectDir = sshClient.getProjectDir(projectId)
-          const excludedTools = config.remote.excludeTools ?? []
-          const remoteToolNames = ['bash', 'read', 'write', 'edit', 'multiedit', 'ls', 'glob', 'grep']
-            .filter(t => !excludedTools.includes(t))
-          const localToolNames = [
-            'memory-read', 'memory-write', 'memory-edit', 'memory-delete',
-            'memory-kv-set', 'memory-kv-get', 'memory-kv-list', 'memory-kv-delete',
-            'memory-health', 'memory-plan-execute', 'memory-loop',
-            'memory-loop-cancel', 'memory-loop-status',
-          ]
-          output.system.push([
-            '## Remote Container Integration',
-            'This session executes commands in a remote Linux container (Debian) via SSH.',
-            `Remote project directory: ${projectDir}`,
-            '',
-            `**Tools running on the remote container:** ${remoteToolNames.join(', ')}`,
-            `**Tools running locally (not on the remote):** ${localToolNames.join(', ')}`,
-            '',
-            'Use **relative paths** (e.g., `src/foo.ts`) for all file operations — they resolve automatically to the project directory on the remote container.',
-            'Do NOT use absolute paths from your local machine — they do not exist on the remote.',
-            '',
-            'Available on the remote: node, pnpm, bun, python3, uv, git, gh, ripgrep (rg), jq, make, gawk.',
-          ].join('\n'))
-        }
       },
     } as Hooks & { getCleanup: () => Promise<void> }
   }

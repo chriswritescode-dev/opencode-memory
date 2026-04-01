@@ -65,3 +65,29 @@ docker compose down
 |-----|-------------|
 | `SANDBOX_PORT` | SSH port mapping (default: 2222) |
 | `AUTHORIZED_KEYS` | Public key content (alternative to volume mount) |
+
+## File Synchronization
+
+The remote sandbox uses [Mutagen](https://mutagen.io/) for real-time bidirectional file synchronization over SSH.
+
+### Host Requirements
+
+- **Mutagen CLI** must be installed on the host machine:
+  ```bash
+  brew install mutagen-io/mutagen/mutagen  # macOS
+  ```
+
+### How It Works
+
+- Mutagen auto-deploys its agent binary to the container via SCP on first connection (no Dockerfile changes needed)
+- Sync mode: `two-way-resolved` (local/alpha wins conflicts)
+- Files sync in real-time via filesystem watching with efficient differential transfers
+- Named sessions: `opencode-<projectId>` for main project, `opencode-wt-<worktreeName>` for worktrees
+- SSH config entry `opencode-sandbox` is automatically created with correct key path and port
+
+### Ignored Paths
+
+Mutagen sync automatically ignores:
+- `.git/` directories (via `--ignore-vcs` flag)
+- `node_modules/`
+- `.mutagen/`

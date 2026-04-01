@@ -1,7 +1,6 @@
 import { tool } from '@opencode-ai/plugin'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import type { SshClient } from './ssh-client'
-import type { GitSyncManager } from './git-sync'
 import type { RemoteSyncRegistry } from './sync-registry'
 import type { RemoteStateManager } from './state'
 import type { Logger } from '../types'

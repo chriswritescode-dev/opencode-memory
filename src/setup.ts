@@ -139,6 +139,7 @@ function normalizeRemoteConfig(remote: RemoteConfig | undefined): RemoteConfig |
     port: remote.port ?? 22,
     user: remote.user ?? 'root',
     basePath: remote.basePath ?? '/projects',
+    disableLsp: remote.disableLsp ?? true,
   }
 }
 

@@ -57,11 +57,11 @@ export function createLoopEventHandler(
       try {
         const syncManager = syncRegistry.getForWorktree(state.worktreeName)
         if (syncManager) {
-          await syncManager.autoCommitAndPull()
-          logger.log(`Loop: pulled final remote changes for ${state.worktreeName}`)
+          await syncManager.flush()
+          logger.log(`Loop: flushed remote sync for ${state.worktreeName}`)
         }
       } catch (err) {
-        logger.error(`Loop: failed to pull final remote changes for ${state.worktreeName}`, err)
+        logger.error(`Loop: failed to flush remote sync for ${state.worktreeName}`, err)
       }
     }
 
