@@ -84,4 +84,27 @@ describe('createSshClient', () => {
     const url = client.getSshUrl('/projects/test-project')
     expect(url).toBe('ssh://test-host/projects/test-project')
   })
+
+  test('getWorktreeDir returns correct path', () => {
+    const config: RemoteConfig = {
+      enabled: true,
+      host: 'test-host',
+      basePath: '/projects',
+    }
+
+    const client = createSshClient(config, mockLogger)
+    const worktreeDir = client.getWorktreeDir('loop-feature-a')
+    expect(worktreeDir).toBe('/projects/worktrees/loop-feature-a')
+  })
+
+  test('getWorktreeDir uses default basePath', () => {
+    const config: RemoteConfig = {
+      enabled: true,
+      host: 'test-host',
+    }
+
+    const client = createSshClient(config, mockLogger)
+    const worktreeDir = client.getWorktreeDir('loop-feature-a')
+    expect(worktreeDir).toBe('/projects/worktrees/loop-feature-a')
+  })
 })

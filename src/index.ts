@@ -21,6 +21,7 @@ import type { VecService } from './storage/vec-types'
 import { createSshClient, type SshClient } from './remote/ssh-client'
 import { createGitSyncManager, type GitSyncManager } from './remote/git-sync'
 import { createRemoteTools } from './remote/tools'
+import { createRemoteSyncRegistry, type RemoteSyncRegistry } from './remote/sync-registry'
 
 
 export function createMemoryPlugin(config: PluginConfig): Plugin {
@@ -52,6 +53,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     let sshClient: SshClient | null = null
     let gitSync: GitSyncManager | null = null
     let remoteTools: Record<string, any> | null = null
+    let syncRegistry: RemoteSyncRegistry | null = null
 
     if (config.remote?.enabled) {
       try {
@@ -67,7 +69,13 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       }
 
       if (sshClient) {
-        const syncManager = createGitSyncManager(sshClient, projectId, directory, logger)
+        const syncManager = createGitSyncManager(
+          sshClient,
+          sshClient.getProjectDir(projectId),
+          directory,
+          projectId,
+          logger,
+        )
         try {
           await syncManager.initializeAndSync()
           gitSync = syncManager
@@ -76,11 +84,26 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           logger.error('Remote git sync initialization failed', err)
         }
 
-        const allRemoteTools = createRemoteTools(sshClient, projectId, logger)
+        const allRemoteTools = createRemoteTools(
+          sshClient,
+          sshClient.getProjectDir(projectId),
+          logger,
+          (sessionId: string) => {
+            const wtName = loopService.resolveWorktreeName(sessionId)
+            if (!wtName) return undefined
+            const state = loopService.getActiveState(wtName)
+            if (!state?.worktree) return undefined
+            return sshClient!.getWorktreeDir(wtName)
+          }
+        )
         const excludeSet = new Set(config.remote.excludeTools ?? [])
         remoteTools = Object.fromEntries(
           Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
         )
+
+        if (gitSync) {
+          syncRegistry = createRemoteSyncRegistry(sshClient, syncManager, logger)
+        }
       }
     }
 
@@ -116,7 +139,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     if (reconciledCount > 0) {
       logger.log(`Reconciled ${reconciledCount} stale loop(s) from previous session`)
     }
-    const loopHandler = createLoopEventHandler(loopService, client, v2, logger, () => config)
+    const loopHandler = createLoopEventHandler(loopService, client, v2, logger, () => config, syncRegistry)
 
     const mismatchState: DimensionMismatchState = {
       detected: false,
@@ -227,6 +250,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       cleanup,
       input,
       sshClient,
+      syncRegistry,
     }
 
     const tools = createTools(ctx)
@@ -254,10 +278,26 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           cleanup()
           return
         }
-        if (gitSync && eventInput.event?.type === 'session.idle') {
-          gitSync.autoCommitAndPull().catch((err: unknown) => {
+        if (syncRegistry && eventInput.event?.type === 'session.idle') {
+          const sessionId = (eventInput.event.properties as Record<string, unknown>)?.sessionID as string
+          if (sessionId) {
+            const syncManager = syncRegistry.resolveForSession(
+              sessionId,
+              (sid) => loopService.resolveWorktreeName(sid),
+              (name) => loopService.getActiveState(name),
+            )
+            try {
+              await syncManager.autoCommitAndPull()
+            } catch (err) {
+              logger.error('Remote git sync on idle failed', err)
+            }
+          }
+        } else if (gitSync && eventInput.event?.type === 'session.idle') {
+          try {
+            await gitSync.autoCommitAndPull()
+          } catch (err) {
             logger.error('Remote git sync on idle failed', err)
-          })
+          }
         }
         await loopHandler.onEvent(eventInput)
         await sessionHooks.onEvent(eventInput)
@@ -354,12 +394,27 @@ You MUST always present your plan to the user for explicit approval before proce
       ) => {
         if (sshClient && config.remote?.enabled) {
           const projectDir = sshClient.getProjectDir(projectId)
+          const excludedTools = config.remote.excludeTools ?? []
+          const remoteToolNames = ['bash', 'read', 'write', 'edit', 'multiedit', 'ls', 'glob', 'grep']
+            .filter(t => !excludedTools.includes(t))
+          const localToolNames = [
+            'memory-read', 'memory-write', 'memory-edit', 'memory-delete',
+            'memory-kv-set', 'memory-kv-get', 'memory-kv-list', 'memory-kv-delete',
+            'memory-health', 'memory-plan-execute', 'memory-loop',
+            'memory-loop-cancel', 'memory-loop-status',
+          ]
           output.system.push([
             '## Remote Container Integration',
-            'This session executes commands in a remote container via SSH.',
-            `Project directory: ${projectDir}`,
-            'All bash commands and file operations run on the remote container.',
-            'Do NOT reference local file paths — use paths relative to the project directory.',
+            'This session executes commands in a remote Linux container (Debian) via SSH.',
+            `Remote project directory: ${projectDir}`,
+            '',
+            `**Tools running on the remote container:** ${remoteToolNames.join(', ')}`,
+            `**Tools running locally (not on the remote):** ${localToolNames.join(', ')}`,
+            '',
+            'Use **relative paths** (e.g., `src/foo.ts`) for all file operations — they resolve automatically to the project directory on the remote container.',
+            'Do NOT use absolute paths from your local machine — they do not exist on the remote.',
+            '',
+            'Available on the remote: node, pnpm, bun, python3, uv, git, gh, ripgrep (rg), jq, make, gawk.',
           ].join('\n'))
         }
       },

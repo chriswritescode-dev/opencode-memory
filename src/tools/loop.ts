@@ -81,6 +81,15 @@ async function setupLoop(
     const worktreeInfo = worktreeResult.data
     logger.log(`loop: worktree created at ${worktreeInfo.directory} (branch: ${worktreeInfo.branch})`)
 
+    if (ctx.syncRegistry && options.worktree) {
+      try {
+        await ctx.syncRegistry.registerWorktree(autoWorktreeName, worktreeInfo.directory)
+        logger.log(`loop: registered remote worktree sync for ${autoWorktreeName}`)
+      } catch (err) {
+        logger.error(`loop: failed to register remote worktree sync`, err)
+      }
+    }
+
     const createResult = await v2.session.create({
       title: options.sessionTitle,
       directory: worktreeInfo.directory,

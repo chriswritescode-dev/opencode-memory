@@ -117,12 +117,12 @@ All execution modes require a **title** — a short descriptive label for the se
 
 ### Parameter Reference
 
-| Option | Tool | worktree | Plan Content |
+| Option | Tool | Parameter | Plan Content |
 |---|---|---|---|
-| New session | memory-plan-execute | false | Full self-contained plan |
-| Execute here | memory-plan-execute | true | "Execute the implementation plan from this conversation. Review all phases above and implement each one." |
-| Loop (worktree) | memory-loop | true | Full self-contained plan |
-| Loop | memory-loop | false | Full self-contained plan |
+| New session | memory-plan-execute | inPlace: false | Full self-contained plan |
+| Execute here | memory-plan-execute | inPlace: true | "See plan above" (continues this session with existing context) |
+| Loop (worktree) | memory-loop | worktree: true | Full self-contained plan |
+| Loop | memory-loop | worktree: false | Full self-contained plan |
 
 "Full self-contained" means the plan must include every file path, implementation detail, code pattern, phase dependency, verification step, and gotcha. The receiving agent starts with zero context. Do NOT summarize, abbreviate, or include <promise> tags.
 `,

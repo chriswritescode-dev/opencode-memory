@@ -144,6 +144,10 @@ export function createLoopService(
 
     let prompt = `[${systemLine}]\n\n${state.prompt ?? ''}`
 
+    if (state.completionPromise) {
+      prompt += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following tag exactly: <promise>${state.completionPromise}</promise>\n\nDo NOT output this tag until every phase is truly complete. The loop will continue until this signal is detected.`
+    }
+
     if (auditFindings) {
       const completionInstruction = state.completionPromise
         ? '\n\nAfter fixing all issues, output the completion signal.'

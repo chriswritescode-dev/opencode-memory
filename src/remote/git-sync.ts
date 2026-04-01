@@ -2,7 +2,7 @@ import { execSync } from 'child_process'
 import type { SshClient } from './ssh-client'
 import type { Logger } from '../types'
 
-const remoteName = 'container'
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 class HostGitManager {
   private operationQueue: Promise<void> = Promise.resolve()
@@ -40,11 +40,14 @@ class HostGitManager {
           if (i === 2) {
             throw err
           }
+          await sleep(500 * Math.pow(2, i))
         }
       }
     })()
 
-    this.operationQueue = pushPromise
+    this.operationQueue = pushPromise.catch((err: unknown) => {
+      logger?.error('Remote: push operation failed', err)
+    })
 
     try {
       await pushPromise
@@ -80,11 +83,12 @@ class HostGitManager {
           if (i === 2) {
             throw err
           }
+          await sleep(500 * Math.pow(2, i))
         }
       }
     })()
 
-    this.operationQueue = pullPromise
+    this.operationQueue = pullPromise.catch(() => {})
     await pullPromise
   }
 }
@@ -132,24 +136,27 @@ export interface GitSyncManager {
 
 export function createGitSyncManager(
   sshClient: SshClient,
-  projectId: string,
-  worktree: string,
+  remoteDir: string,
+  localDir: string,
+  branchSuffix: string,
   logger: Logger,
 ): GitSyncManager {
   const hostGit = new HostGitManager()
   const remoteGit = new RemoteGitManager(sshClient, logger)
-  const projectDir = sshClient.getProjectDir(projectId)
+  const projectDir = remoteDir
 
-  const branch = `opencode/remote/${projectId}`
-  const localBranch = `opencode/remote/${projectId}`
+  const sanitizedSuffix = branchSuffix.replace(/[^a-zA-Z0-9-]/g, '-')
+  const branch = `opencode/remote/${sanitizedSuffix}`
+  const localBranch = `opencode/remote/${sanitizedSuffix}`
+  const remoteName = 'container-' + sanitizedSuffix
 
   function getSshUrl() {
-    return sshClient.getSshUrl(projectDir)
+    return sshClient.getSshUrl(remoteDir)
   }
 
   return {
     async initializeAndSync() {
-      if (!hostGit.hasRepo(worktree)) {
+      if (!hostGit.hasRepo(localDir)) {
         logger.log('Remote: no local git repo, skipping initialization')
         await remoteGit.ensureDirectory(projectDir)
         return
@@ -158,7 +165,7 @@ export function createGitSyncManager(
       await remoteGit.ensureRepo(projectDir)
 
       const sshUrl = getSshUrl()
-      const pushSuccess = await hostGit.pushToRemote(remoteName, sshUrl, branch, worktree, logger)
+      const pushSuccess = await hostGit.pushToRemote(remoteName, sshUrl, branch, localDir, logger)
 
       if (pushSuccess) {
         await remoteGit.resetToRemote(projectDir, branch)
@@ -169,19 +176,42 @@ export function createGitSyncManager(
     },
 
     async autoCommitAndPull() {
-      if (!hostGit.hasRepo(worktree)) {
+      if (!hostGit.hasRepo(localDir)) {
         return false
       }
 
       await remoteGit.ensureRepo(projectDir)
 
+      let stashed = false
+      try {
+        const status = execSync('git status --porcelain', { cwd: localDir, encoding: 'utf-8' })
+        if (status.trim()) {
+          execSync('git stash push -m "opencode-remote-sync-auto-stash"', { cwd: localDir, encoding: 'utf-8' })
+          stashed = true
+          logger.log('Remote: stashed local changes before pull')
+        }
+      } catch (err) {
+        logger.log('Remote: failed to check for local changes before pull', err)
+      }
+
       const hasChanges = await remoteGit.autoCommit(projectDir)
-      if (!hasChanges) {
+      if (!hasChanges && !stashed) {
         return false
       }
 
       const sshUrl = getSshUrl()
-      await hostGit.pull(remoteName, sshUrl, branch, worktree, localBranch, logger)
+      await hostGit.pull(remoteName, sshUrl, branch, localDir, localBranch, logger)
+
+      if (stashed) {
+        try {
+          execSync('git stash pop', { cwd: localDir, encoding: 'utf-8' })
+          logger.log('Remote: restored stashed local changes')
+        } catch (err) {
+          logger.error('Remote: failed to restore stashed changes - changes remain in stash. Run "git stash pop" to restore')
+          return false
+        }
+      }
+
       logger.log('Remote: auto-commit and pull complete')
       return true
     },

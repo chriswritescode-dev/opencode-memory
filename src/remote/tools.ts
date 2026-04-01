@@ -12,10 +12,10 @@ function resolvePath(filePath: string, projectDir: string): string {
 
 export function createRemoteTools(
   sshClient: SshClient,
-  projectId: string,
+  defaultProjectDir: string,
   logger: Logger,
+  resolveProjectDir?: (sessionId: string) => string | undefined,
 ): Record<string, ToolDefinition> {
-  const projectDir = sshClient.getProjectDir(projectId)
 
   return {
     bash: tool({
@@ -26,8 +26,9 @@ export function createRemoteTools(
         timeout: z.number().optional().describe('Command timeout in milliseconds'),
         workdir: z.string().optional().describe('Working directory for the command (relative to project root)'),
       },
-      execute: async (args) => {
-        const cwd = args.workdir ? resolvePath(args.workdir, projectDir) : projectDir
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const cwd = args.workdir ? resolvePath(args.workdir, effectiveDir) : effectiveDir
         logger.debug(`Remote bash: ${args.command} (cwd: ${cwd})`)
 
         const result = await sshClient.exec(args.command, cwd)
@@ -47,8 +48,9 @@ export function createRemoteTools(
         offset: z.number().optional().describe('Line number to start from (1-indexed)'),
         limit: z.number().optional().describe('Maximum number of lines to read'),
       },
-      execute: async (args) => {
-        const resolvedPath = resolvePath(args.filePath, projectDir)
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote read: ${resolvedPath}`)
 
         let content: string
@@ -85,8 +87,9 @@ export function createRemoteTools(
         filePath: z.string().describe('Path to the file to write'),
         content: z.string().describe('Content to write to the file'),
       },
-      execute: async (args) => {
-        const resolvedPath = resolvePath(args.filePath, projectDir)
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote write: ${resolvedPath} (${args.content.length} bytes)`)
 
         await sshClient.writeFile(resolvedPath, args.content)
@@ -101,8 +104,9 @@ export function createRemoteTools(
         oldText: z.string().describe('Text to find and replace'),
         newText: z.string().describe('Replacement text'),
       },
-      execute: async (args) => {
-        const resolvedPath = resolvePath(args.filePath, projectDir)
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote edit: ${resolvedPath}`)
 
         const content = await sshClient.readFile(resolvedPath)
@@ -125,8 +129,9 @@ export function createRemoteTools(
           newText: z.string().describe('Replacement text'),
         })).describe('Array of edits to apply'),
       },
-      execute: async (args) => {
-        const resolvedPath = resolvePath(args.filePath, projectDir)
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote multiedit: ${resolvedPath} (${args.edits.length} edits)`)
 
         let content = await sshClient.readFile(resolvedPath)
@@ -147,8 +152,9 @@ export function createRemoteTools(
       args: {
         path: z.string().optional().describe('Directory path to list (defaults to project root)'),
       },
-      execute: async (args) => {
-        const resolvedPath = args.path ? resolvePath(args.path, projectDir) : projectDir
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const resolvedPath = args.path ? resolvePath(args.path, effectiveDir) : effectiveDir
         logger.debug(`Remote ls: ${resolvedPath}`)
 
         const result = await sshClient.exec(`ls -la "${resolvedPath}"`)
@@ -162,11 +168,12 @@ export function createRemoteTools(
         pattern: z.string().describe('Glob pattern to match'),
         path: z.string().optional().describe('Base path to search from (defaults to project root)'),
       },
-      execute: async (args) => {
-        const basePath = args.path ? resolvePath(args.path, projectDir) : projectDir
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const basePath = args.path ? resolvePath(args.path, effectiveDir) : effectiveDir
         logger.debug(`Remote glob: ${args.pattern} (basePath: ${basePath})`)
 
-        const result = await sshClient.exec(`find "${basePath}" -path "${args.pattern}" -type f 2>/dev/null | head -200`)
+        const result = await sshClient.exec(`find "${basePath}" -name "${args.pattern}" -type f 2>/dev/null | head -200`)
         const files = result.stdout.split('\n').filter(line => line.trim() !== '')
         return files.join('\n')
       },
@@ -179,8 +186,9 @@ export function createRemoteTools(
         path: z.string().optional().describe('Base path to search from (defaults to project root)'),
         include: z.string().optional().describe('File pattern to include (e.g., "*.ts")'),
       },
-      execute: async (args) => {
-        const basePath = args.path ? resolvePath(args.path, projectDir) : projectDir
+      execute: async (args, context) => {
+        const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
+        const basePath = args.path ? resolvePath(args.path, effectiveDir) : effectiveDir
         const includeFlag = args.include ? `--include="${args.include}"` : ''
         logger.debug(`Remote grep: ${args.pattern} (basePath: ${basePath}${args.include ? `, include: ${args.include}` : ''})`)
 

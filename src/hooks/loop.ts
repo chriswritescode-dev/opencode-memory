@@ -16,12 +16,15 @@ export interface LoopEventHandler {
   cancelBySessionId(sessionId: string): Promise<boolean>
 }
 
+import type { RemoteSyncRegistry } from '../remote/sync-registry'
+
 export function createLoopEventHandler(
   loopService: LoopService,
   client: PluginInput['client'],
   v2Client: OpencodeClient,
   logger: Logger,
   getConfig: () => PluginConfig,
+  syncRegistry?: RemoteSyncRegistry | null,
 ): LoopEventHandler {
   const minAudits = loopService.getMinAudits()
   const retryTimeouts = new Map<string, NodeJS.Timeout>()
@@ -49,6 +52,18 @@ export function createLoopEventHandler(
 
     let committed = false
     let cleaned = false
+
+    if (syncRegistry && state.worktree) {
+      try {
+        const syncManager = syncRegistry.getForWorktree(state.worktreeName)
+        if (syncManager) {
+          await syncManager.autoCommitAndPull()
+          logger.log(`Loop: pulled final remote changes for ${state.worktreeName}`)
+        }
+      } catch (err) {
+        logger.error(`Loop: failed to pull final remote changes for ${state.worktreeName}`, err)
+      }
+    }
 
     try {
       const addResult = spawnSync('git', ['add', '-A'], { cwd: state.worktreeDir, encoding: 'utf-8' })
@@ -89,6 +104,14 @@ export function createLoopEventHandler(
         logger.log(`Loop: removed worktree ${state.worktreeDir}, branch ${state.worktreeBranch} preserved`)
       } catch (err) {
         logger.error(`Loop: failed to remove worktree ${state.worktreeDir}`, err)
+      }
+    }
+
+    if (syncRegistry && state.worktree) {
+      try {
+        await syncRegistry.cleanupRemoteWorktree(state.worktreeName)
+      } catch (err) {
+        logger.error(`Loop: failed to cleanup remote worktree for ${state.worktreeName}`, err)
       }
     }
 

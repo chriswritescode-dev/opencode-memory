@@ -9,6 +9,7 @@ export interface SshClient {
   healthCheck(): Promise<boolean>
   getSshUrl(path: string): string
   getProjectDir(projectId: string): string
+  getWorktreeDir(worktreeName: string): string
 }
 
 export function createSshClient(config: RemoteConfig, logger: Logger): SshClient {
@@ -27,7 +28,8 @@ export function createSshClient(config: RemoteConfig, logger: Logger): SshClient
 
   return {
     async exec(command: string, cwd?: string) {
-      const finalCommand = cwd ? `cd '${cwd}' && ${command}` : command
+      const escapedCwd = cwd?.replace(/'/g, "'\\''")
+      const finalCommand = escapedCwd ? `cd '${escapedCwd}' && ${command}` : command
       logger.debug(`SSH exec: ${finalCommand}`)
       
       const result = spawnSync('ssh', [...baseArgs, hostTarget, finalCommand], {
@@ -35,7 +37,12 @@ export function createSshClient(config: RemoteConfig, logger: Logger): SshClient
         timeout: 120000,
       })
       
-      const exitCode = result.status === null ? 124 : (result.status ?? 1)
+      if (result.status === null) {
+        logger.error('SSH command timed out after 120s')
+        return { exitCode: 124, stdout: '', stderr: 'SSH command timed out after 120s' }
+      }
+      
+      const exitCode = result.status ?? 1
       
       return {
         exitCode,
@@ -45,7 +52,8 @@ export function createSshClient(config: RemoteConfig, logger: Logger): SshClient
     },
 
     async readFile(remotePath: string) {
-      const result = await this.exec(`cat -- "${remotePath}"`)
+      const escapedPath = remotePath.replace(/'/g, "'\\''")
+      const result = await this.exec(`cat -- '${escapedPath}'`)
       if (result.exitCode !== 0) {
         throw new Error(`Failed to read ${remotePath}: ${result.stderr}`)
       }
@@ -53,24 +61,29 @@ export function createSshClient(config: RemoteConfig, logger: Logger): SshClient
     },
 
     async writeFile(remotePath: string, content: string) {
-      const dirResult = await this.exec(`mkdir -p -- "$(dirname "${remotePath}")"`)
+      const escapedPath = remotePath.replace(/'/g, "'\\''")
+      const dirResult = await this.exec(`mkdir -p -- "$(dirname '${escapedPath}')"`)
       if (dirResult.exitCode !== 0) {
         throw new Error(`Failed to create directory for ${remotePath}: ${dirResult.stderr}`)
       }
       
-      const result = spawnSync('ssh', [...baseArgs, hostTarget, `cat > "${remotePath}"`], {
+      const result = spawnSync('ssh', [...baseArgs, hostTarget, `cat > '${escapedPath}'`], {
         input: content,
         encoding: 'utf-8',
         timeout: 120000,
       })
       
+      if (result.status === null) {
+        throw new Error(`Failed to write ${remotePath}: SSH command timed out after 120s`)
+      }
       if (result.status !== 0) {
-        throw new Error(`Failed to write ${remotePath}: ${result.stderr ?? 'unknown error'}`)
+        throw new Error(`Failed to write ${remotePath}: ${result.stderr ?? ''}`)
       }
     },
 
     async listDir(remotePath: string) {
-      const result = await this.exec(`ls -la -- "${remotePath}"`)
+      const escapedPath = remotePath.replace(/'/g, "'\\''")
+      const result = await this.exec(`ls -la -- '${escapedPath}'`)
       return result.stdout
     },
 
@@ -87,6 +100,10 @@ export function createSshClient(config: RemoteConfig, logger: Logger): SshClient
 
     getProjectDir(projectId: string) {
       return `${basePath}/${projectId}`
+    },
+
+    getWorktreeDir(worktreeName: string) {
+      return `${basePath}/worktrees/${worktreeName}`
     },
   }
 }
