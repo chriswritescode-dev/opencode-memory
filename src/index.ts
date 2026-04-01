@@ -1,5 +1,6 @@
 import type { Plugin, PluginInput, Hooks } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin'
+const z = tool.schema
 import { createOpencodeClient as createV2Client } from '@opencode-ai/sdk/v2'
 import { agents } from './agents'
 import { createConfigHandler } from './config'
@@ -22,6 +23,7 @@ import { createSshClient, type SshClient } from './remote/ssh-client'
 import { createGitSyncManager, type GitSyncManager } from './remote/git-sync'
 import { createRemoteTools } from './remote/tools'
 import { createRemoteSyncRegistry, type RemoteSyncRegistry } from './remote/sync-registry'
+import { createRemoteStateManager, type RemoteStateManager } from './remote/state'
 
 
 export function createMemoryPlugin(config: PluginConfig): Plugin {
@@ -54,8 +56,12 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     let gitSync: GitSyncManager | null = null
     let remoteTools: Record<string, any> | null = null
     let syncRegistry: RemoteSyncRegistry | null = null
+    let remoteStateManager: RemoteStateManager | null = null
 
-    if (config.remote?.enabled) {
+    const remoteEnabled = config.remote?.enabled ?? false
+    remoteStateManager = createRemoteStateManager(remoteEnabled, logger)
+
+    if (remoteEnabled && config.remote) {
       try {
         sshClient = createSshClient(config.remote, logger)
         const healthy = await sshClient.healthCheck()
@@ -84,6 +90,12 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           logger.error('Remote git sync initialization failed', err)
         }
 
+        if (gitSync) {
+          syncRegistry = createRemoteSyncRegistry(sshClient, syncManager, logger)
+          remoteStateManager.setConnectionInfo(config.remote.host, sshClient.getProjectDir(projectId))
+          remoteStateManager.enable(sshClient, gitSync, syncRegistry)
+        }
+
         const allRemoteTools = createRemoteTools(
           sshClient,
           sshClient.getProjectDir(projectId),
@@ -94,16 +106,13 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
             const state = loopService.getActiveState(wtName)
             if (!state?.worktree) return undefined
             return sshClient!.getWorktreeDir(wtName)
-          }
+          },
+          remoteStateManager
         )
         const excludeSet = new Set(config.remote.excludeTools ?? [])
         remoteTools = Object.fromEntries(
           Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
         )
-
-        if (gitSync) {
-          syncRegistry = createRemoteSyncRegistry(sshClient, syncManager, logger)
-        }
       }
     }
 
@@ -254,8 +263,50 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     }
 
     const tools = createTools(ctx)
-    if (remoteTools) {
-      Object.assign(tools, remoteTools)
+    if (remoteTools && remoteStateManager) {
+      // Wrap each remote tool to check state
+      const wrappedRemoteTools: Record<string, any> = {}
+      for (const [name, toolDef] of Object.entries(remoteTools)) {
+        wrappedRemoteTools[name] = tool({
+          ...(toolDef as any),
+          execute: async (args: any, context: any) => {
+            if (!remoteStateManager?.isEnabled()) {
+              throw new Error(`Remote tool '${name}' is disabled. Use remote-toggle to enable.`)
+            }
+            return (toolDef.execute as any)(args, context)
+          },
+        })
+      }
+      Object.assign(tools, wrappedRemoteTools)
+    }
+
+    // Add toggle/status tools (always available)
+    if (remoteStateManager) {
+      tools['remote-toggle'] = tool({
+        description: 'Toggle remote container integration on or off',
+        args: {
+          enabled: z.boolean().describe('Whether to enable or disable remote'),
+        },
+        execute: async (args) => {
+          const newState = args.enabled
+          const wasEnabled = remoteStateManager.isEnabled()
+          
+          if (newState === wasEnabled) {
+            return `Remote is already ${newState ? 'enabled' : 'disabled'}`
+          }
+          
+          await remoteStateManager.toggle()
+          return `Remote ${newState ? 'enabled' : 'disabled'}`
+        },
+      })
+      
+      tools['remote-status'] = tool({
+        description: 'Get current remote container status',
+        args: {},
+        execute: async () => {
+          return JSON.stringify(remoteStateManager.getState(), null, 2)
+        },
+      })
     }
     const toolExecuteBeforeHook = createToolExecuteBeforeHook(ctx)
     const toolExecuteAfterHook = createToolExecuteAfterHook(ctx)

@@ -1,6 +1,9 @@
 import { tool } from '@opencode-ai/plugin'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import type { SshClient } from './ssh-client'
+import type { GitSyncManager } from './git-sync'
+import type { RemoteSyncRegistry } from './sync-registry'
+import type { RemoteStateManager } from './state'
 import type { Logger } from '../types'
 
 const z = tool.schema
@@ -15,6 +18,7 @@ export function createRemoteTools(
   defaultProjectDir: string,
   logger: Logger,
   resolveProjectDir?: (sessionId: string) => string | undefined,
+  remoteState?: RemoteStateManager,
 ): Record<string, ToolDefinition> {
 
   return {
@@ -194,6 +198,39 @@ export function createRemoteTools(
 
         const result = await sshClient.exec(`grep -rn ${includeFlag} "${args.pattern}" "${basePath}" 2>/dev/null | head -200`)
         return result.stdout
+      },
+    }),
+
+    'remote-toggle': tool({
+      description: 'Toggle remote container integration on or off',
+      args: {
+        enabled: z.boolean().describe('Whether to enable or disable remote'),
+      },
+      execute: async (args, context) => {
+        if (!remoteState) {
+          return 'Remote state manager not initialized'
+        }
+        
+        const newState = args.enabled
+        const wasEnabled = remoteState.isEnabled()
+        
+        if (newState === wasEnabled) {
+          return `Remote is already ${newState ? 'enabled' : 'disabled'}`
+        }
+        
+        await remoteState.toggle()
+        return `Remote ${newState ? 'enabled' : 'disabled'}`
+      },
+    }),
+
+    'remote-status': tool({
+      description: 'Get current remote container status',
+      args: {},
+      execute: async () => {
+        if (!remoteState) {
+          return JSON.stringify({ enabled: false, connected: false, reason: 'Not initialized' })
+        }
+        return JSON.stringify(remoteState.getState(), null, 2)
       },
     }),
   }
