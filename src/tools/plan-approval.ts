@@ -43,15 +43,14 @@ Do NOT output text without also making this tool call.
 export { LOOP_BLOCKED_TOOLS, PLAN_APPROVAL_LABELS, PLAN_APPROVAL_DIRECTIVES }
 
 export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execute.before'] {
-  const { loopService, logger, config, input } = ctx
-  const sshClient = ctx.getSshClient?.() ?? null
+  const { loopService, logger, config, input, remoteStateManager } = ctx
 
   return async (
     hookInput: { tool: string; sessionID: string; callID: string },
     hookOutput: { args: any }
   ) => {
     const localDir = input.directory
-    if (sshClient && config.remote?.enabled && localDir) {
+    if (remoteStateManager?.isEnabled() && config.remote && localDir) {
       const remoteTools = ['bash', 'read', 'write', 'edit', 'multiedit', 'ls', 'glob', 'grep']
       const excludedTools = config.remote.excludeTools ?? []
       if (remoteTools.includes(hookInput.tool) && !excludedTools.includes(hookInput.tool)) {
@@ -97,17 +96,17 @@ export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execu
 }
 
 export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execute.after'] {
-  const { loopService, logger, config } = ctx
-  const sshClient = ctx.getSshClient?.() ?? null
+  const { loopService, logger, config, remoteStateManager } = ctx
 
   return async (
     hookInput: { tool: string; sessionID: string; callID: string; args: unknown },
     hookOutput: { title: string; output: string; metadata: unknown }
   ) => {
-    if (sshClient && config.remote?.enabled) {
+    if (remoteStateManager?.isEnabled() && config.remote) {
+      const sshClient = remoteStateManager.getSshClient()
       const remoteTools = ['bash', 'read', 'write', 'edit', 'multiedit', 'ls', 'glob', 'grep']
       const excludedTools = config.remote.excludeTools ?? []
-      if (remoteTools.includes(hookInput.tool) && !excludedTools.includes(hookInput.tool)) {
+      if (sshClient && remoteTools.includes(hookInput.tool) && !excludedTools.includes(hookInput.tool)) {
         const projectDir = sshClient.getProjectDir(ctx.projectId)
         const normalizedDir = projectDir.endsWith('/') ? projectDir : projectDir + '/'
         if (typeof hookOutput.output === 'string' && hookOutput.output.includes(normalizedDir)) {

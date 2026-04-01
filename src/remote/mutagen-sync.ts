@@ -12,10 +12,8 @@ export interface SyncManager {
   terminate(): Promise<void>
 }
 
-export function buildMutagenUrl(config: RemoteConfig, remotePath: string): string {
-  const portPart = config.port && config.port !== 22 ? `:${config.port}` : ''
-  const userPart = config.user ? `${config.user}@` : ''
-  return `${userPart}${config.host}${portPart}:${remotePath}`
+export function buildMutagenUrl(_config: RemoteConfig, remotePath: string): string {
+  return `opencode-sandbox:${remotePath}`
 }
 
 export function checkMutagenInstalled(): boolean {
@@ -53,8 +51,20 @@ function ensureSshConfig(config: RemoteConfig, logger: Logger): void {
 
     const hostRegex = new RegExp(`^Host\\s+${hostAlias}\\s*$`, 'm')
     if (hostRegex.test(configContent)) {
-      logger.debug(`SSH config already has entry for ${hostAlias}`)
-      return
+      const expectedLines = [
+        `HostName ${config.host}`,
+        `Port ${port}`,
+        `User ${user}`,
+        `IdentityFile ${identityFile}`,
+      ]
+      const hasAllExpected = expectedLines.every(line => configContent.includes(line))
+      if (hasAllExpected) {
+        logger.debug(`SSH config already has entry for ${hostAlias}`)
+        return
+      }
+      const blockRegex = new RegExp(`\\nHost\\s+${hostAlias}\\s*\\n(?:[^\\n]*\\n)*?(?=\\nHost\\s|$)`, 'g')
+      configContent = configContent.replace(blockRegex, '\n')
+      logger.log(`SSH config entry for ${hostAlias} outdated, replacing`)
     }
 
     const newEntry = `
@@ -99,12 +109,12 @@ export function createMutagenSyncManager(
       try {
         const listResult = execSync(
           `mutagen sync list --label-selector=name=${sanitizedSessionName}`,
-          { encoding: 'utf-8' }
+          { encoding: 'utf-8', stdio: 'pipe' }
         )
         if (listResult.trim()) {
           logger.debug(`Session ${sanitizedSessionName} already exists, terminating first`)
           try {
-            execSync(`mutagen sync terminate ${sanitizedSessionName}`, { encoding: 'utf-8' })
+            execSync(`mutagen sync terminate ${sanitizedSessionName}`, { encoding: 'utf-8', stdio: 'pipe' })
             await sleep(500)
           } catch (err) {
             logger.debug('Failed to terminate existing session', err)
@@ -121,18 +131,16 @@ export function createMutagenSyncManager(
         logger.error('Failed to clean remote directory', err)
       }
 
-      const keyPath = config.keyPath || `${process.env.HOME || '~'}/.ssh/opencode-sandbox`
-      const sshFlags = `-i ${keyPath} -p ${config.port || 22} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`
-
       logger.log(`Remote: creating Mutagen sync session ${sanitizedSessionName}`)
       execSync(
-        `mutagen sync create --name=${sanitizedSessionName} --sync-mode=two-way-resolved --ignore-vcs -i "node_modules" -i ".mutagen" --ssh-flags="${sshFlags}" '${localDir}' '${mutagenUrl}'`,
-        { encoding: 'utf-8' }
+        `mutagen sync create --name=${sanitizedSessionName} --sync-mode=two-way-resolved --ignore-vcs -i "node_modules" -i ".mutagen" '${localDir}' '${mutagenUrl}'`,
+        { encoding: 'utf-8', stdio: 'pipe' }
       )
 
       logger.log(`Remote: flushing initial sync for ${sanitizedSessionName}`)
       execSync(`mutagen sync flush ${sanitizedSessionName}`, {
         encoding: 'utf-8',
+        stdio: 'pipe',
         timeout: 120000,
       })
 
@@ -143,6 +151,7 @@ export function createMutagenSyncManager(
       try {
         execSync(`mutagen sync flush ${sanitizedSessionName}`, {
           encoding: 'utf-8',
+          stdio: 'pipe',
           timeout: 120000,
         })
         logger.debug(`Remote: flush completed for ${sanitizedSessionName}`)
@@ -154,7 +163,7 @@ export function createMutagenSyncManager(
 
     async terminate() {
       try {
-        execSync(`mutagen sync terminate ${sanitizedSessionName}`, { encoding: 'utf-8' })
+        execSync(`mutagen sync terminate ${sanitizedSessionName}`, { encoding: 'utf-8', stdio: 'pipe' })
         logger.log(`Remote: terminated sync session ${sanitizedSessionName}`)
       } catch (err) {
         logger.debug(`Remote: terminate failed for ${sanitizedSessionName} (may not exist)`, err)

@@ -8,7 +8,7 @@ mock.module('child_process', () => ({
 }))
 
 describe('buildMutagenUrl', () => {
-  test('returns correct URL with full config', () => {
+  test('returns correct URL with opencode-sandbox host alias', () => {
     const config: RemoteConfig = {
       enabled: true,
       host: 'localhost',
@@ -17,37 +17,17 @@ describe('buildMutagenUrl', () => {
       basePath: '/projects',
     }
     const url = buildMutagenUrl(config, '/projects/test')
-    expect(url).toBe('devuser@localhost:2222:/projects/test')
+    expect(url).toBe('opencode-sandbox:/projects/test')
   })
 
-  test('returns correct URL without port', () => {
+  test('ignores config values and uses host alias', () => {
     const config: RemoteConfig = {
       enabled: true,
       host: 'example.org',
       user: 'root',
     }
     const url = buildMutagenUrl(config, '/projects/test')
-    expect(url).toBe('root@example.org:/projects/test')
-  })
-
-  test('returns correct URL without user', () => {
-    const config: RemoteConfig = {
-      enabled: true,
-      host: 'example.org',
-    }
-    const url = buildMutagenUrl(config, '/projects/test')
-    expect(url).toBe('example.org:/projects/test')
-  })
-
-  test('handles default port 22 correctly', () => {
-    const config: RemoteConfig = {
-      enabled: true,
-      host: 'localhost',
-      port: 22,
-      user: 'root',
-    }
-    const url = buildMutagenUrl(config, '/projects/test')
-    expect(url).toBe('root@localhost:/projects/test')
+    expect(url).toBe('opencode-sandbox:/projects/test')
   })
 })
 

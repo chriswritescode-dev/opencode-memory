@@ -23,7 +23,7 @@ import { createSshClient, type SshClient } from './remote/ssh-client'
 import { createMutagenSyncManager, type SyncManager, checkMutagenInstalled } from './remote/mutagen-sync'
 import { createRemoteTools } from './remote/tools'
 import { createRemoteSyncRegistry, type RemoteSyncRegistry } from './remote/sync-registry'
-import { createRemoteStateManager, type RemoteStateManager } from './remote/state'
+import { createRemoteStateManager, type RemoteStateManager, processRemoteCommand } from './remote/state'
 import { initializeRemote, type RemoteInitResult } from './remote/init'
 
 
@@ -72,33 +72,35 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         remoteStateManager.enable(result.sshClient, result.syncManager, result.syncRegistry)
       } catch (err) {
         logger.error('Failed to initialize remote', err)
+        remoteStateManager.setConnectionInfo(config.remote.host, '')
       }
+    }
 
-      if (sshClient) {
-        const allRemoteTools = createRemoteTools(
-          () => {
-            const client = remoteStateManager!.getSshClient()
-            if (!client) throw new Error('Remote is not connected')
-            return client
-          },
-          sshClient.getProjectDir(projectId),
-          logger,
-          (sessionId: string) => {
-            const client = remoteStateManager!.getSshClient()
-            if (!client) return undefined
-            const wtName = loopService.resolveWorktreeName(sessionId)
-            if (!wtName) return undefined
-            const state = loopService.getActiveState(wtName)
-            if (!state?.worktree) return undefined
-            return client.getWorktreeDir(wtName)
-          },
-          remoteStateManager
-        )
-        const excludeSet = new Set(config.remote.excludeTools ?? [])
-        remoteTools = Object.fromEntries(
-          Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
-        )
-      }
+    if (config.remote) {
+      const defaultDir = sshClient?.getProjectDir(projectId) ?? `${config.remote.basePath ?? '/projects'}/${projectId}`
+      const allRemoteTools = createRemoteTools(
+        () => {
+          const client = remoteStateManager!.getSshClient()
+          if (!client) throw new Error('Remote is not connected')
+          return client
+        },
+        defaultDir,
+        logger,
+        (sessionId: string) => {
+          const client = remoteStateManager!.getSshClient()
+          if (!client) return undefined
+          const wtName = loopService.resolveWorktreeName(sessionId)
+          if (!wtName) return undefined
+          const state = loopService.getActiveState(wtName)
+          if (!state?.worktree) return undefined
+          return client.getWorktreeDir(wtName)
+        },
+        remoteStateManager
+      )
+      const excludeSet = new Set(config.remote.excludeTools ?? [])
+      remoteTools = Object.fromEntries(
+        Object.entries(allRemoteTools).filter(([name]) => !excludeSet.has(name))
+      )
     }
 
     const provider = createEmbeddingProvider(config.embedding)
@@ -258,6 +260,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       input,
       getSshClient: () => remoteStateManager?.getSshClient() ?? null,
       getSyncRegistry: () => remoteStateManager?.getSyncRegistry() ?? null,
+      remoteStateManager,
     }
 
     const tools = createTools(ctx)
@@ -269,7 +272,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           ...(toolDef as any),
           execute: async (args: any, context: any) => {
             if (!remoteStateManager?.isEnabled()) {
-              throw new Error(`Remote tool '${name}' is disabled. Use remote-toggle to enable.`)
+              throw new Error(`Remote tool '${name}' is disabled. Use 'ocm-mem remote on' to enable.`)
             }
             remoteStateManager.incrementBusy()
             try {
@@ -283,57 +286,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       Object.assign(tools, wrappedRemoteTools)
     }
 
-    // Add toggle/status tools (always available)
     if (remoteStateManager) {
-      tools['remote-toggle'] = tool({
-        description: 'Toggle remote container integration on or off',
-        args: {
-          enabled: z.boolean().describe('Whether to enable or disable remote'),
-        },
-        execute: async (args) => {
-          const newState = args.enabled
-          const wasEnabled = remoteStateManager.isEnabled()
-          
-          if (newState === wasEnabled) {
-            return `Remote is already ${newState ? 'enabled' : 'disabled'}`
-          }
-          
-          if (!newState) {
-            if (remoteStateManager.isBusy()) {
-              return 'Cannot disable remote while a tool is executing. Wait for the current operation to complete.'
-            }
-            try {
-              await remoteStateManager.disable()
-              kvService.set(projectId, 'remote:state', remoteStateManager.getState())
-              return 'Remote disabled. Sync terminated after completing in-flight operations.'
-            } catch (err) {
-              return `Failed to disable remote: ${err instanceof Error ? err.message : String(err)}`
-            }
-          }
-          
-          if (remoteStateManager.isBusy()) {
-            return 'Cannot enable remote while a tool is executing. Wait for the current operation to complete.'
-          }
-          
-          if (!config.remote) {
-            return 'Cannot enable remote: no remote configuration found'
-          }
-          
-          try {
-            const result = await initializeRemote(config.remote, directory, projectId, logger)
-            sshClient = result.sshClient
-            syncManager = result.syncManager
-            syncRegistry = result.syncRegistry
-            remoteStateManager.setConnectionInfo(config.remote.host, result.sshClient.getProjectDir(projectId))
-            remoteStateManager.enable(result.sshClient, result.syncManager, result.syncRegistry)
-            kvService.set(projectId, 'remote:state', remoteStateManager.getState())
-            return 'Remote enabled. SSH connection established and sync initialized.'
-          } catch (err) {
-            return `Failed to enable remote: ${err instanceof Error ? err.message : String(err)}`
-          }
-        },
-      })
-      
       tools['remote-status'] = tool({
         description: 'Get current remote container status',
         args: {},
@@ -364,6 +317,11 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           cleanup()
           return
         }
+
+        if (remoteStateManager) {
+          await processRemoteCommand(kvService, projectId, remoteStateManager, config, directory, logger)
+        }
+
         if (eventInput.event?.type === 'session.idle') {
           const currentRegistry = remoteStateManager?.getSyncRegistry()
           if (currentRegistry) {

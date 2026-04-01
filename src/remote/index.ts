@@ -3,3 +3,4 @@ export { createMutagenSyncManager, type SyncManager, checkMutagenInstalled } fro
 export { createRemoteTools } from './tools'
 export { initializeRemote } from './init'
 export type { RemoteInitResult } from './init'
+export { processRemoteCommand } from './state'

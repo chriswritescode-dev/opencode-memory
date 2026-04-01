@@ -97,6 +97,16 @@ const commands: Record<string, CommandModule> = {
       help()
     },
   },
+  remote: {
+    cli: async (args, globalOpts) => {
+      const { cli } = await import('./remote')
+      cli(args, globalOpts)
+    },
+    help: async () => {
+      const { help } = await import('./remote')
+      help()
+    },
+  },
 }
 
 function printMainHelp(): void {
@@ -116,6 +126,7 @@ Commands:
   status    Show loop status
   cancel    Cancel a loop
   container Manage remote sandbox container
+  remote    Toggle remote container on/off
 
 Global Options:
   --db-path <path>       Path to memory database

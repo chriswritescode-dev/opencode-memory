@@ -28,6 +28,7 @@ export interface InitState {
 
 import type { SshClient } from '../remote/ssh-client'
 import type { RemoteSyncRegistry } from '../remote/sync-registry'
+import type { RemoteStateManager } from '../remote/state'
 
 export interface ToolContext {
   projectId: string
@@ -50,6 +51,7 @@ export interface ToolContext {
   input: PluginInput
   getSshClient?: () => SshClient | null
   getSyncRegistry?: () => RemoteSyncRegistry | null
+  remoteStateManager?: RemoteStateManager | null
 }
 
 export function withDimensionWarning(mismatchState: DimensionMismatchState, result: string): string {

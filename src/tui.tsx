@@ -65,6 +65,68 @@ function resolveProjectId(directory: string): string | null {
   return null
 }
 
+type RemoteState = {
+  enabled: boolean
+  connected: boolean
+  busy: boolean
+  host?: string
+  projectDir?: string
+}
+
+function readRemoteState(projectId: string): RemoteState | null {
+  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
+  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
+  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
+
+  if (!existsSync(dbPath)) return null
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true })
+    const now = Date.now()
+    const row = db.prepare('SELECT data FROM project_kv WHERE project_id = ? AND key = ? AND expires_at > ?')
+      .get(projectId, 'remote:state', now) as { data: string } | null
+    if (!row) return null
+    return JSON.parse(row.data)
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
+function writeRemoteCommand(projectId: string, action: 'enable' | 'disable'): boolean {
+  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
+  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
+  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
+
+  if (!existsSync(dbPath)) return false
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath)
+    const now = Date.now()
+    const ttl = 5 * 60 * 1000
+    const expiresAt = now + ttl
+    const data = JSON.stringify({ action })
+    const key = 'remote:command'
+
+    const existing = db.prepare('SELECT 1 FROM project_kv WHERE project_id = ? AND key = ?').get(projectId, key)
+    if (existing) {
+      db.prepare('UPDATE project_kv SET data = ?, expires_at = ?, updated_at = ? WHERE project_id = ? AND key = ?')
+        .run(data, expiresAt, now, projectId, key)
+    } else {
+      db.prepare('INSERT INTO project_kv (project_id, key, data, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(projectId, key, data, expiresAt, now, now)
+    }
+    return true
+  } catch {
+    return false
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
 function readLoopStates(projectId: string): LoopInfo[] {
   const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
   const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
@@ -220,6 +282,7 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
 function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
   const [open, setOpen] = createSignal(true)
   const [loops, setLoops] = createSignal<LoopInfo[]>([])
+  const [remoteState, setRemoteState] = createSignal<RemoteState | null>(null)
   const theme = () => props.api.theme.current
   const directory = props.api.state.path.directory
   const pid = resolveProjectId(directory)
@@ -262,9 +325,16 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
     })
     setLoops(visible)
   }
+
+  function refreshRemote() {
+    if (!pid) return
+    const state = readRemoteState(pid)
+    setRemoteState(state)
+  }
   
   const unsub = props.api.event.on('session.status', () => {
     refreshLoops()
+    refreshRemote()
   })
 
   let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -273,6 +343,7 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
     if (pollTimer) return
     pollTimer = setInterval(() => {
       refreshLoops()
+      refreshRemote()
     }, 5000)
   }
 
@@ -284,10 +355,12 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
   }
 
   refreshLoops()
+  refreshRemote()
 
   createEffect(() => {
     const hasActiveWorktreeLoops = loops().filter(l => l.active && l.worktree).length > 0
-    if (hasActiveWorktreeLoops) {
+    const hasRemote = remoteState() !== null
+    if (hasActiveWorktreeLoops || hasRemote) {
       startPolling()
     } else {
       stopPolling()
@@ -300,6 +373,7 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
   })
 
   const hasContent = createMemo(() => {
+    if (remoteState() !== null) return true
     if (props.opts.showLoops && loops().length > 0) return true
     return false
   })
@@ -324,6 +398,68 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
             </Show>
           </text>
         </box>
+        <Show when={open() && remoteState() !== null}>
+          {(() => {
+            const state = remoteState()!
+            const dotColor = state.enabled && state.connected ? theme().success : theme().textMuted
+            const label = state.enabled && state.connected
+              ? `Remote: ${state.host ?? 'connected'}`
+              : 'Remote: off'
+            return (
+              <box
+                flexDirection="row"
+                gap={1}
+                onMouseUp={() => {
+                  if (!pid) return
+                  const currentState = remoteState()
+                  const action = currentState?.enabled ? 'disable' : 'enable'
+                  const actionLabel = action === 'enable' ? 'Enable' : 'Disable'
+                  props.api.ui.dialog.replace(() => (
+                    <props.api.ui.DialogSelect
+                      title="Remote Container"
+                      options={[
+                        {
+                          title: `${actionLabel} remote`,
+                          value: action,
+                          description: currentState?.enabled
+                            ? `Connected to ${currentState.host ?? 'remote'}`
+                            : 'Remote is currently disabled',
+                          onSelect: () => {
+                            props.api.ui.dialog.clear()
+                            const ok = writeRemoteCommand(pid!, action)
+                            props.api.ui.toast({
+                              message: ok
+                                ? `Remote ${action} command queued`
+                                : `Failed to queue remote ${action} command`,
+                              variant: ok ? 'success' : 'error',
+                              duration: 3000,
+                            })
+                            setTimeout(refreshRemote, 2000)
+                          },
+                        },
+                      ]}
+                      onSelect={(opt) => {
+                        if (opt.onSelect) {
+                          opt.onSelect()
+                          return
+                        }
+                        props.api.ui.dialog.clear()
+                      }}
+                    />
+                  ))
+                }}
+              >
+                <text flexShrink={0} style={{ fg: dotColor }}>•</text>
+                <text fg={theme().text} wrapMode="word">
+                  {label}
+                  <Show when={state.busy}>
+                    <span style={{ fg: theme().warning }}> (busy)</span>
+                  </Show>
+                </text>
+              </box>
+            )
+          })()}
+        </Show>
         <Show when={open() && props.opts.showLoops && loops().length > 0}>
           <For each={loops()}>
             {(loop) => (
