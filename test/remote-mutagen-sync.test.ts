@@ -3,6 +3,10 @@ import { buildMutagenUrl, sanitizeSessionName, checkMutagenInstalled, createMuta
 import type { RemoteConfig } from '../src/types'
 import type { SshClient } from '../src/remote/ssh-client'
 
+mock.module('child_process', () => ({
+  execSync: mock(() => ''),
+}))
+
 describe('buildMutagenUrl', () => {
   test('returns correct URL with full config', () => {
     const config: RemoteConfig = {
@@ -108,5 +112,43 @@ describe('createMutagenSyncManager', () => {
     expect(typeof syncManager.initializeAndSync).toBe('function')
     expect(typeof syncManager.flush).toBe('function')
     expect(typeof syncManager.terminate).toBe('function')
+  })
+
+  test('initializeAndSync cleans remote directory before creating sync session', async () => {
+    const config: RemoteConfig = {
+      enabled: true,
+      host: 'localhost',
+      port: 2222,
+      user: 'devuser',
+    }
+    const mockLogger = {
+      log: mock(() => {}),
+      error: mock(() => {}),
+      debug: mock(() => {}),
+    }
+    const mockSshClient = {
+      exec: mock(() => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' })),
+      readFile: mock(() => Promise.resolve('')),
+      writeFile: mock(() => Promise.resolve()),
+      listDir: mock(() => Promise.resolve('')),
+      healthCheck: mock(() => Promise.resolve(true)),
+      getSshUrl: mock(() => 'ssh://localhost'),
+      getProjectDir: mock(() => '/projects/test'),
+      getWorktreeDir: mock(() => '/projects/worktrees/test'),
+    } as unknown as SshClient
+
+    const syncManager = createMutagenSyncManager(
+      config,
+      '/local/path',
+      '/remote/path',
+      'test-session',
+      mockLogger,
+      mockSshClient,
+    )
+
+    await syncManager.initializeAndSync()
+
+    expect(mockSshClient.exec).toHaveBeenCalledWith(`rm -rf "/remote/path" && mkdir -p "/remote/path"`)
+    expect(mockLogger.log).toHaveBeenCalledWith('Remote: cleaning remote directory /remote/path')
   })
 })

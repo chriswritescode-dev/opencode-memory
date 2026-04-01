@@ -115,9 +115,10 @@ export function createMutagenSyncManager(
       }
 
       try {
-        await sshClient.exec(`mkdir -p "${remoteDir}"`)
+        logger.log(`Remote: cleaning remote directory ${remoteDir}`)
+        await sshClient.exec(`rm -rf "${remoteDir}" && mkdir -p "${remoteDir}"`)
       } catch (err) {
-        logger.error('Failed to ensure remote directory exists', err)
+        logger.error('Failed to clean remote directory', err)
       }
 
       const keyPath = config.keyPath || `${process.env.HOME || '~'}/.ssh/opencode-sandbox`
