@@ -14,6 +14,7 @@ export interface RemoteSyncRegistry {
     getWorktreeState: (name: string) => { worktree?: boolean } | null,
   ): SyncManager
   cleanupRemoteWorktree(worktreeName: string): Promise<void>
+  terminateAll(): Promise<void>
 }
 
 export function createRemoteSyncRegistry(
@@ -84,6 +85,19 @@ export function createRemoteSyncRegistry(
       } catch (err) {
         logger.error(`Remote: failed to cleanup worktree dir ${remoteDir}`, err)
       }
+    },
+
+    async terminateAll() {
+      const entries = Array.from(worktreeSyncs.entries())
+      for (const [name, sm] of entries) {
+        try {
+          await sm.terminate()
+          logger.debug(`Remote: terminated worktree sync for ${name}`)
+        } catch (err) {
+          logger.debug(`Remote: failed to terminate worktree sync for ${name}`, err)
+        }
+      }
+      worktreeSyncs.clear()
     },
   }
 }

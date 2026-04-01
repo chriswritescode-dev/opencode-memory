@@ -6,17 +6,23 @@ import type { Logger } from '../types'
 export interface RemoteState {
   enabled: boolean
   connected: boolean
+  busy: boolean
   host?: string
   projectDir?: string
 }
 
 export interface RemoteStateManager {
   isEnabled(): boolean
+  isBusy(): boolean
+  incrementBusy(): void
+  decrementBusy(): void
   enable(sshClient: SshClient, syncManager: SyncManager, syncRegistry: RemoteSyncRegistry): void
   disable(): Promise<void>
-  toggle(currentSshClient?: SshClient): Promise<boolean>
   getState(): RemoteState
   setConnectionInfo(host: string, projectDir: string): void
+  getSyncManager(): SyncManager | null
+  getSyncRegistry(): RemoteSyncRegistry | null
+  getSshClient(): SshClient | null
 }
 
 export function createRemoteStateManager(
@@ -24,6 +30,7 @@ export function createRemoteStateManager(
   logger: Logger
 ): RemoteStateManager {
   let enabled = initialEnabled
+  let busyCount = 0
   let sshClient: SshClient | null = null
   let syncManager: SyncManager | null = null
   let syncRegistry: RemoteSyncRegistry | null = null
@@ -35,6 +42,18 @@ export function createRemoteStateManager(
       return enabled
     },
 
+    isBusy() {
+      return busyCount > 0
+    },
+
+    incrementBusy() {
+      busyCount++
+    },
+
+    decrementBusy() {
+      if (busyCount > 0) busyCount--
+    },
+
     enable(client: SshClient, manager: SyncManager, registry: RemoteSyncRegistry) {
       enabled = true
       sshClient = client
@@ -44,28 +63,37 @@ export function createRemoteStateManager(
     },
 
     async disable() {
+      if (busyCount > 0) {
+        throw new Error('Cannot disable remote while a tool is executing')
+      }
+      if (syncRegistry) {
+        try {
+          await syncRegistry.terminateAll()
+        } catch (err) {
+          logger.debug('Remote: worktree sync cleanup failed during disable', err)
+        }
+      }
+      if (syncManager) {
+        try {
+          await syncManager.terminate()
+        } catch (err) {
+          logger.debug('Remote: sync terminate failed during disable', err)
+        }
+      }
       enabled = false
       sshClient = null
       syncManager = null
       syncRegistry = null
+      host = undefined
+      projectDir = undefined
       logger.log('Remote: disabled')
-    },
-
-    async toggle(currentClient?: SshClient) {
-      enabled = !enabled
-      if (!enabled) {
-        sshClient = null
-        syncManager = null
-        syncRegistry = null
-      }
-      logger.log(`Remote: toggled ${enabled ? 'on' : 'off'}`)
-      return enabled
     },
 
     getState(): RemoteState {
       return {
         enabled,
         connected: enabled && sshClient !== null,
+        busy: busyCount > 0,
         host,
         projectDir,
       }
@@ -74,6 +102,18 @@ export function createRemoteStateManager(
     setConnectionInfo(h: string, dir: string) {
       host = h
       projectDir = dir
+    },
+
+    getSyncManager() {
+      return syncManager
+    },
+
+    getSyncRegistry() {
+      return syncRegistry
+    },
+
+    getSshClient() {
+      return sshClient
     },
   }
 }

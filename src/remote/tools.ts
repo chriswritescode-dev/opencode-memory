@@ -13,7 +13,7 @@ function resolvePath(filePath: string, projectDir: string): string {
 }
 
 export function createRemoteTools(
-  sshClient: SshClient,
+  getSshClient: () => SshClient,
   defaultProjectDir: string,
   logger: Logger,
   resolveProjectDir?: (sessionId: string) => string | undefined,
@@ -30,6 +30,7 @@ export function createRemoteTools(
         workdir: z.string().optional().describe('Working directory for the command (relative to project root)'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const cwd = args.workdir ? resolvePath(args.workdir, effectiveDir) : effectiveDir
         logger.debug(`Remote bash: ${args.command} (cwd: ${cwd})`)
@@ -52,6 +53,7 @@ export function createRemoteTools(
         limit: z.number().optional().describe('Maximum number of lines to read'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote read: ${resolvedPath}`)
@@ -91,6 +93,7 @@ export function createRemoteTools(
         content: z.string().describe('Content to write to the file'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote write: ${resolvedPath} (${args.content.length} bytes)`)
@@ -108,6 +111,7 @@ export function createRemoteTools(
         newText: z.string().describe('Replacement text'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote edit: ${resolvedPath}`)
@@ -133,6 +137,7 @@ export function createRemoteTools(
         })).describe('Array of edits to apply'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const resolvedPath = resolvePath(args.filePath, effectiveDir)
         logger.debug(`Remote multiedit: ${resolvedPath} (${args.edits.length} edits)`)
@@ -156,6 +161,7 @@ export function createRemoteTools(
         path: z.string().optional().describe('Directory path to list (defaults to project root)'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const resolvedPath = args.path ? resolvePath(args.path, effectiveDir) : effectiveDir
         logger.debug(`Remote ls: ${resolvedPath}`)
@@ -172,12 +178,13 @@ export function createRemoteTools(
         path: z.string().optional().describe('Base path to search from (defaults to project root)'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const basePath = args.path ? resolvePath(args.path, effectiveDir) : effectiveDir
         logger.debug(`Remote glob: ${args.pattern} (basePath: ${basePath})`)
 
         const result = await sshClient.exec(`find "${basePath}" -name "${args.pattern}" -type f 2>/dev/null | head -200`)
-        const files = result.stdout.split('\n').filter(line => line.trim() !== '')
+        const files = result.stdout.split('\n').filter((line) => line.trim() !== '')
         return files.join('\n')
       },
     }),
@@ -190,6 +197,7 @@ export function createRemoteTools(
         include: z.string().optional().describe('File pattern to include (e.g., "*.ts")'),
       },
       execute: async (args, context) => {
+        const sshClient = getSshClient()
         const effectiveDir = resolveProjectDir?.(context.sessionID) ?? defaultProjectDir
         const basePath = args.path ? resolvePath(args.path, effectiveDir) : effectiveDir
         const includeFlag = args.include ? `--include="${args.include}"` : ''
@@ -197,39 +205,6 @@ export function createRemoteTools(
 
         const result = await sshClient.exec(`grep -rn ${includeFlag} "${args.pattern}" "${basePath}" 2>/dev/null | head -200`)
         return result.stdout
-      },
-    }),
-
-    'remote-toggle': tool({
-      description: 'Toggle remote container integration on or off',
-      args: {
-        enabled: z.boolean().describe('Whether to enable or disable remote'),
-      },
-      execute: async (args, context) => {
-        if (!remoteState) {
-          return 'Remote state manager not initialized'
-        }
-        
-        const newState = args.enabled
-        const wasEnabled = remoteState.isEnabled()
-        
-        if (newState === wasEnabled) {
-          return `Remote is already ${newState ? 'enabled' : 'disabled'}`
-        }
-        
-        await remoteState.toggle()
-        return `Remote ${newState ? 'enabled' : 'disabled'}`
-      },
-    }),
-
-    'remote-status': tool({
-      description: 'Get current remote container status',
-      args: {},
-      execute: async () => {
-        if (!remoteState) {
-          return JSON.stringify({ enabled: false, connected: false, reason: 'Not initialized' })
-        }
-        return JSON.stringify(remoteState.getState(), null, 2)
       },
     }),
   }

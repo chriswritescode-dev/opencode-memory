@@ -43,7 +43,8 @@ Do NOT output text without also making this tool call.
 export { LOOP_BLOCKED_TOOLS, PLAN_APPROVAL_LABELS, PLAN_APPROVAL_DIRECTIVES }
 
 export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execute.before'] {
-  const { loopService, logger, config, sshClient, input } = ctx
+  const { loopService, logger, config, input } = ctx
+  const sshClient = ctx.getSshClient?.() ?? null
 
   return async (
     hookInput: { tool: string; sessionID: string; callID: string },
@@ -96,7 +97,8 @@ export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execu
 }
 
 export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execute.after'] {
-  const { loopService, logger, sshClient, config } = ctx
+  const { loopService, logger, config } = ctx
+  const sshClient = ctx.getSshClient?.() ?? null
 
   return async (
     hookInput: { tool: string; sessionID: string; callID: string; args: unknown },

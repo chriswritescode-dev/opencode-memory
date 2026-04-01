@@ -24,7 +24,7 @@ export function createLoopEventHandler(
   v2Client: OpencodeClient,
   logger: Logger,
   getConfig: () => PluginConfig,
-  syncRegistry?: RemoteSyncRegistry | null,
+  getSyncRegistry?: () => RemoteSyncRegistry | null,
 ): LoopEventHandler {
   const minAudits = loopService.getMinAudits()
   const retryTimeouts = new Map<string, NodeJS.Timeout>()
@@ -53,6 +53,7 @@ export function createLoopEventHandler(
     let committed = false
     let cleaned = false
 
+    const syncRegistry = getSyncRegistry?.() ?? null
     if (syncRegistry && state.worktree) {
       try {
         const syncManager = syncRegistry.getForWorktree(state.worktreeName)
@@ -107,9 +108,10 @@ export function createLoopEventHandler(
       }
     }
 
-    if (syncRegistry && state.worktree) {
+    const syncRegistryForCleanup = getSyncRegistry?.() ?? null
+    if (syncRegistryForCleanup && state.worktree) {
       try {
-        await syncRegistry.cleanupRemoteWorktree(state.worktreeName)
+        await syncRegistryForCleanup.cleanupRemoteWorktree(state.worktreeName)
       } catch (err) {
         logger.error(`Loop: failed to cleanup remote worktree for ${state.worktreeName}`, err)
       }

@@ -270,8 +270,9 @@ export async function autoValidateOnLoad(
 }
 
 export function createHealthTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const { projectId, db, config, provider, dataDir, memoryService, logger, cleanup, input, mismatchState, initState, sshClient } = ctx
+  const { projectId, db, config, provider, dataDir, memoryService, logger, cleanup, input, mismatchState, initState } = ctx
   const getCurrentVec = ctx.getCurrentVec
+  const sshClient = ctx.getSshClient?.() ?? null
 
   return {
     'memory-health': tool({

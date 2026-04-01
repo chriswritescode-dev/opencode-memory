@@ -48,8 +48,8 @@ export interface ToolContext {
   getCurrentVec: () => VecService
   cleanup: () => Promise<void>
   input: PluginInput
-  sshClient?: SshClient | null
-  syncRegistry?: RemoteSyncRegistry | null
+  getSshClient?: () => SshClient | null
+  getSyncRegistry?: () => RemoteSyncRegistry | null
 }
 
 export function withDimensionWarning(mismatchState: DimensionMismatchState, result: string): string {
