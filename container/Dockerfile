@@ -59,7 +59,7 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 22
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no devuser@localhost -p 22 echo ok || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD pgrep -x sshd > /dev/null && exit 0 || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

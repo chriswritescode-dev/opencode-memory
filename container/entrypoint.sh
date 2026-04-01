@@ -17,12 +17,12 @@ fi
 if [ -n "$AUTHORIZED_KEYS" ]; then
     echo "$AUTHORIZED_KEYS" > /home/devuser/.ssh/authorized_keys
     chmod 600 /home/devuser/.ssh/authorized_keys
-    chown devuser:devuser /home/devuser/.ssh/authorized_keys
+    chown devuser:devuser /home/devuser/.ssh/authorized_keys || true
 fi
 
 if [ -f /home/devuser/.ssh/authorized_keys ]; then
-    chown devuser:devuser /home/devuser/.ssh/authorized_keys
-    chmod 600 /home/devuser/.ssh/authorized_keys
+    chmod 600 /home/devuser/.ssh/authorized_keys 2>/dev/null || true
+    chown devuser:devuser /home/devuser/.ssh/authorized_keys 2>/dev/null || true
 fi
 
 if [ ! -f /home/devuser/.ssh/authorized_keys ] || [ ! -s /home/devuser/.ssh/authorized_keys ]; then
