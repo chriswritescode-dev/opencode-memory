@@ -8,6 +8,7 @@ import { execSync } from 'child_process'
 import { Database } from 'bun:sqlite'
 import { VERSION } from './version'
 import { compareVersions } from './utils/upgrade'
+import { fetchSessionStats, type SessionStats } from './utils/session-stats'
 
 type TuiOptions = {
   sidebar: boolean
@@ -146,27 +147,63 @@ function cancelLoop(projectId: string, loopName: string): string | null {
   }
 }
 
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
+}
+
+function formatDuration(ms: number): string {
+  const hours = Math.floor(ms / (1000 * 60 * 60))
+  const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60))
+  const seconds = Math.floor((ms % (1000 * 60)) / 1000)
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  }
+  return `${seconds}s`
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  return text.slice(0, maxLength - 3) + '...'
+}
+
 function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
   const theme = () => props.api.theme.current
   const loop = props.loop
+  const [stats, setStats] = createSignal<SessionStats | null>(null)
+  const [loading, setLoading] = createSignal(true)
+
+  const directory = props.api.state.path.directory
+
+  createEffect(() => {
+    if (loop.sessionId && directory) {
+      setLoading(true)
+      fetchSessionStats(props.api, loop.sessionId, directory).then((result) => {
+        setStats(result)
+        setLoading(false)
+      }).catch(() => {
+        setStats(null)
+        setLoading(false)
+      })
+    } else {
+      setLoading(false)
+    }
+  })
 
   const options = () => {
     const opts: Array<{ title: string; value: string; description?: string; onSelect?: () => void }> = []
 
     if (loop.worktreeBranch) {
       opts.push({
-        title: `Branch: ${loop.worktreeBranch}`,
+        title: 'View branch',
         value: 'branch',
-        description: loop.worktreeDir,
+        description: `${loop.worktreeBranch}`,
       })
     }
 
     if (loop.active) {
-      const max = loop.maxIterations > 0 ? `/${loop.maxIterations}` : ''
-      opts.push({
-        title: `Status: ${loop.phase} · iteration ${loop.iteration}${max}`,
-        value: 'status',
-      })
       opts.push({
         title: 'Cancel loop',
         value: 'cancel',
@@ -199,21 +236,113 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
       })
     }
 
+    opts.push({
+      title: 'Close',
+      value: 'close',
+    })
+
     return opts
   }
 
+  
+
   return (
-    <props.api.ui.DialogSelect
-      title={loop.name}
-      options={options()}
-      onSelect={(opt) => {
-        if (opt.onSelect) {
-          opt.onSelect()
-          return
-        }
-        props.api.ui.dialog.clear()
-      }}
-    />
+    <box flexDirection="column">
+      <box paddingBottom={1}>
+        <text fg={theme().text}>
+          <b>{loop.name}</b>
+        </text>
+      </box>
+      
+      <Show when={loading()}>
+        <box paddingBottom={1}>
+          <text fg={theme().textMuted}>Loading stats...</text>
+        </box>
+      </Show>
+      
+      <Show when={!loading()}>
+        <box flexDirection="column" gap={1} paddingX={1} paddingY={1}>
+          <Show when={stats()} fallback={
+            <box>
+              <text fg={theme().textMuted}>Session stats unavailable</text>
+            </box>
+          }>
+            <box flexDirection="column" gap={1}>
+              <box>
+                <text fg={theme().text}>
+                  <b>Session:</b> {loop.sessionId.slice(0, 8)}...
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <b>Phase:</b> {loop.phase}
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <b>Iteration:</b> {loop.iteration}/{loop.maxIterations}
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <b>Tokens:</b> {formatTokens(stats()!.tokens.input)} in / {formatTokens(stats()!.tokens.output)} out / {formatTokens(stats()!.tokens.reasoning)} reasoning
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <b>Cost:</b> ${stats()!.cost.toFixed(4)}
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <b>Messages:</b> {stats()!.messages.total} total ({stats()!.messages.assistant} assistant)
+                </text>
+              </box>
+              <Show when={stats()!.fileChanges}>
+                <box>
+                  <text fg={theme().text}>
+                    <b>Files:</b> {stats()!.fileChanges!.files} changed (+{stats()!.fileChanges!.additions}/-{stats()!.fileChanges!.deletions})
+                  </text>
+                </box>
+              </Show>
+              <Show when={stats()!.timing}>
+                <box>
+                  <text fg={theme().text}>
+                    <b>Duration:</b> {formatDuration(stats()!.timing!.durationMs)}
+                  </text>
+                </box>
+              </Show>
+              <Show when={stats()?.lastAssistantMessage?.text}>
+                <box flexDirection="column" gap={1} paddingTop={1}>
+                  <box>
+                    <text fg={theme().text}><b>Last assistant message:</b></text>
+                  </box>
+                  <box borderStyle="rounded" borderColor={theme().border}>
+                    <text fg={theme().textMuted} wrapMode="word" paddingX={1} paddingY={1}>
+                      {stats()!.lastAssistantMessage!.text}
+                    </text>
+                  </box>
+                </box>
+              </Show>
+            </box>
+          </Show>
+        </box>
+      </Show>
+      
+      <box>
+        <props.api.ui.DialogSelect
+          title="Actions"
+          options={options()}
+          onSelect={(opt) => {
+            if (opt.onSelect) {
+              opt.onSelect()
+              return
+            }
+            props.api.ui.dialog.clear()
+          }}
+        />
+      </box>
+    </box>
   )
 }
 

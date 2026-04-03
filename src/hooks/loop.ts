@@ -414,7 +414,7 @@ export function createLoopEventHandler(
             logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
           } else {
             await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected <promise>${currentState.completionPromise}</promise> at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
+            logger.log(`Loop completed: detected ${currentState.completionPromise} at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
             return
           }
         } else {
@@ -607,7 +607,7 @@ export function createLoopEventHandler(
             logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
           } else {
             await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected <promise>${currentState.completionPromise}</promise> in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
+            logger.log(`Loop completed: detected ${currentState.completionPromise} in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
             return
           }
         } else {

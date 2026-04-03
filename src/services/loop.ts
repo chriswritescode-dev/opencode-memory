@@ -123,19 +123,14 @@ export function createLoopService(
   }
 
   function checkCompletionPromise(text: string, promise: string): boolean {
-    const match = text.match(/<promise>([\s\S]*?)<\/promise>/)
-    if (!match) {
-      return false
-    }
-    const extracted = match[1].trim().replace(/\s+/g, ' ')
-    return extracted === promise
+    return text.includes(promise)
   }
 
   function buildContinuationPrompt(state: LoopState, auditFindings?: string): string {
     let systemLine = `Loop iteration ${state.iteration ?? 0}`
 
     if (state.completionPromise) {
-      systemLine += ` | To stop: output <promise>${state.completionPromise}</promise> (ONLY after all verification steps pass)`
+      systemLine += ` | To stop: output ${state.completionPromise} (ONLY after all verification steps pass)`
     } else if ((state.maxIterations ?? 0) > 0) {
       systemLine += ` / ${state.maxIterations}`
     } else {

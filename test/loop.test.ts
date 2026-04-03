@@ -56,7 +56,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 1,
       maxIterations: 5,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -106,35 +106,24 @@ describe('LoopService', () => {
     expect(retrieved).toBeNull()
   })
 
-  test('checkCompletionPromise matches exact promise', () => {
+  test('checkCompletionPromise matches exact phrase', () => {
     const text = 'Some response text <promise>ALL_PHASES_COMPLETE</promise> more text'
-    expect(loopService.checkCompletionPromise(text, 'ALL_PHASES_COMPLETE')).toBe(true)
+    expect(loopService.checkCompletionPromise(text, '<promise>ALL_PHASES_COMPLETE</promise>')).toBe(true)
   })
 
-  test('checkCompletionPromise returns false when no promise tags', () => {
-    const text = 'Some response text without promise tags'
-    expect(loopService.checkCompletionPromise(text, 'ALL_PHASES_COMPLETE')).toBe(false)
+  test('checkCompletionPromise returns false when phrase not present', () => {
+    const text = 'Some response text without the phrase'
+    expect(loopService.checkCompletionPromise(text, '<promise>ALL_PHASES_COMPLETE</promise>')).toBe(false)
   })
 
-  test('checkCompletionPromise returns false when promise does not match', () => {
+  test('checkCompletionPromise returns false when phrase does not match', () => {
     const text = 'Some response <promise>NOT_COMPLETE</promise> text'
-    expect(loopService.checkCompletionPromise(text, 'ALL_PHASES_COMPLETE')).toBe(false)
+    expect(loopService.checkCompletionPromise(text, '<promise>ALL_PHASES_COMPLETE</promise>')).toBe(false)
   })
 
-  test('checkCompletionPromise handles whitespace normalization', () => {
-    const text = 'Response <promise>  ALL_PHASES_COMPLETE   WITH   SPACES  </promise> text'
-    expect(loopService.checkCompletionPromise(text, 'ALL_PHASES_COMPLETE WITH SPACES')).toBe(true)
-  })
-
-  test('checkCompletionPromise matches first promise tag when multiple present', () => {
-    const text = 'First <promise>FIRST</promise> second <promise>SECOND</promise>'
-    expect(loopService.checkCompletionPromise(text, 'FIRST')).toBe(true)
-    expect(loopService.checkCompletionPromise(text, 'SECOND')).toBe(false)
-  })
-
-  test('checkCompletionPromise handles multiline promise', () => {
-    const text = 'Response <promise>\n  MULTI\n  LINE\n</promise> text'
-    expect(loopService.checkCompletionPromise(text, 'MULTI LINE')).toBe(true)
+  test('checkCompletionPromise requires exact match', () => {
+    const text = 'Response <promise>ALL_PHASES_COMPLETE</promise> text'
+    expect(loopService.checkCompletionPromise(text, '<promise>NOT_COMPLETE</promise>')).toBe(false)
   })
 
   test('buildContinuationPrompt includes iteration number', () => {
@@ -169,7 +158,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 1,
       maxIterations: 0,
-      completionPromise: 'COMPLETE_TASK',
+      completionPromise: '<promise>COMPLETE_TASK</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'My test prompt',
       phase: 'coding' as const,
@@ -235,7 +224,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 5,
       maxIterations: 10,
-      completionPromise: 'PERSIST_TEST',
+      completionPromise: '<promise>PERSIST_TEST</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Persistence test',
       phase: 'coding' as const,
@@ -338,7 +327,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 2,
       maxIterations: 0,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -452,7 +441,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 1,
       maxIterations: 5,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -499,7 +488,7 @@ describe('LoopService', () => {
       worktreeBranch: 'main',
       iteration: 1,
       maxIterations: 5,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'In-place test prompt',
       phase: 'coding' as const,
@@ -547,7 +536,7 @@ describe('LoopService', () => {
       worktreeBranch: 'main',
       iteration: 3,
       maxIterations: 0,
-      completionPromise: 'COMPLETE',
+      completionPromise: '<promise>COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'In-place prompt test',
       phase: 'coding' as const,
@@ -939,7 +928,7 @@ describe('reconcileStale', () => {
       worktreeBranch: 'main',
       iteration: 3,
       maxIterations: 10,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1067,7 +1056,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 3,
       maxIterations: 0,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1095,7 +1084,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 2,
       maxIterations: 0,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1117,7 +1106,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 3,
       maxIterations: 0,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1144,7 +1133,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 2,
       maxIterations: 0,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1459,7 +1448,7 @@ describe('Assistant Error Detection', () => {
       worktreeBranch: 'main',
       iteration: 1,
       maxIterations: 5,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1879,7 +1868,7 @@ describe('Assistant Error Detection', () => {
       worktreeBranch: 'main',
       iteration: 1,
       maxIterations: 5,
-      completionPromise: 'ALL_PHASES_COMPLETE',
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,

@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
 import { resolveDataDir, resolveLogPath } from './storage'
 import type { PluginConfig, EmbeddingConfig } from './types'
-import { parse as parseJsoncLib, type ParseError } from 'jsonc-parser'
 
 function resolveBundledConfigPath(): string {
   const pluginDir = dirname(fileURLToPath(import.meta.url))
@@ -88,16 +87,24 @@ function isValidPluginConfig(config: unknown): config is PluginConfig {
   return true
 }
 
+function stripComments(content: string): string {
+  let result = content
+  result = result.replace(/\/\*[\s\S]*?\*\//g, '')
+  result = result.replace(/(^|[^:])(\/\/.*$)/gm, '$1')
+  return result
+}
+
+function stripTrailingCommas(content: string): string {
+  let result = content
+  result = result.replace(/,(\s*}[ \t\n\r]*)/g, '$1')
+  result = result.replace(/,(\s*][ \t\n\r]*)/g, '$1')
+  return result
+}
+
 function parseJsonc<T = unknown>(content: string): T {
-  const errors: ParseError[] = []
-  const result = parseJsoncLib(content, errors, {
-    allowTrailingComma: true,
-    disallowComments: false,
-  })
-  if (errors.length > 0) {
-    throw new SyntaxError(`Invalid JSONC at offset ${errors[0]!.offset}`)
-  }
-  return result as T
+  const cleaned = stripComments(content)
+  const normalized = stripTrailingCommas(cleaned)
+  return JSON.parse(normalized) as T
 }
 
 export function loadPluginConfig(): PluginConfig {

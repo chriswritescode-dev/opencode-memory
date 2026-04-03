@@ -11,7 +11,7 @@ import { formatSessionOutput, formatAuditResult } from '../utils/loop-format'
 import { fetchSessionOutput, MAX_RETRIES, type LoopState, type LoopSessionOutput } from '../services/loop'
 
 const z = tool.schema
-const DEFAULT_PLAN_COMPLETION_PROMISE = 'ALL_PHASES_COMPLETE'
+const DEFAULT_PLAN_COMPLETION_PROMISE = '<promise>ALL_PHASES_COMPLETE</promise>'
 
 interface LoopSetupOptions {
   prompt: string
@@ -128,7 +128,7 @@ async function setupLoop(
 
   let promptText = options.prompt
   if (options.completionPromise) {
-    promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following tag exactly: <promise>${options.completionPromise}</promise>\n\nDo NOT output this tag until every phase is truly complete. The loop will continue until this signal is detected.`
+    promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${options.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
   }
 
   const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
@@ -381,7 +381,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
           let promptText = stoppedState.prompt ?? ''
           if (stoppedState.completionPromise) {
-            promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following tag exactly: <promise>${stoppedState.completionPromise}</promise>\n\nDo NOT output this tag until every phase is truly complete. The loop will continue until this signal is detected.`
+            promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${stoppedState.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
           }
 
           const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)

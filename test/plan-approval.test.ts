@@ -97,7 +97,7 @@ Do NOT output text without also making this tool call.
         worktreeBranch: 'opencode/loop-test',
         iteration: 1,
         maxIterations: 5,
-        completionPromise: 'ALL_PHASES_COMPLETE',
+        completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
         startedAt: new Date().toISOString(),
         prompt: 'Test prompt',
         phase: 'coding' as const,
