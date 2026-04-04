@@ -230,54 +230,75 @@ The plugin supports JSONC format, allowing comments with `//` and `/* */`.
 
 You can edit this file to customize settings. The file is created only if it doesn't already exist. If a config exists at the old location (`~/.local/share/opencode/memory/config.json`), it will be automatically migrated to the new location.
 
-```json
+```jsonc
 {
+  // Embedding configuration for vector embeddings
   "embedding": {
-    "provider": "local",
-    "model": "all-MiniLM-L6-v2",
-    "dimensions": 384,
-    "baseUrl": "",
-    "apiKey": ""
+    "provider": "local",              // Provider: "local", "openai", or "voyage"
+    "model": "all-MiniLM-L6-v2",      // Model name (auto-downloaded for local)
+    "dimensions": 384,                // Vector dimensions (auto-detected if omitted)
+    "baseUrl": "",                   // Custom API endpoint (optional)
+    "apiKey": ""                     // API key for openai/voyage providers
   },
+
+  // Similarity threshold for memory deduplication (0–1, default: 0.25)
   "dedupThreshold": 0.25,
+
+  // Logging configuration
   "logging": {
-    "enabled": false,
-    "debug": false,
-    "file": ""
+    "enabled": false,                // Enable file logging
+    "debug": false,                 // Enable debug-level output
+    "file": ""                      // Log file path (defaults to ~/.local/share/opencode/memory/logs/memory.log)
   },
+
+  // Session compaction settings
   "compaction": {
-    "customPrompt": true,
-    "maxContextTokens": 4000
+    "customPrompt": true,           // Use custom compaction prompt for continuity
+    "maxContextTokens": 4000        // Token budget for injected memory context
   },
+
+  // Memory injection into user messages via semantic search
   "memoryInjection": {
-    "enabled": true,
-    "debug": false,
-    "maxTokens": 2000,
-    "cacheTtlMs": 30000
+    "enabled": true,               // Enable automatic memory injection
+    "debug": false,                // Enable debug logging
+    "maxTokens": 2000,             // Token budget for injected <project-memory> block
+    "cacheTtlMs": 30000            // Cache TTL for identical queries (30s)
   },
+
+  // Messages transform hook for memory injection and read-only enforcement
   "messagesTransform": {
-    "enabled": true,
-    "debug": false
+    "enabled": true,               // Enable transform hook
+    "debug": false                 // Enable debug logging
   },
+
+  // Model override for plan execution sessions (format: "provider/model")
   "executionModel": "",
+
+  // Model override for the auditor agent (format: "provider/model")
   "auditorModel": "",
+
+  // Iterative development loop settings
   "loop": {
-    "enabled": true,
-    "defaultMaxIterations": 15,
-    "cleanupWorktree": false,
-    "defaultAudit": true,
-    "model": "",
-    "minAudits": 1,
-    "stallTimeoutMs": 60000
+    "enabled": true,               // Enable iterative loops
+    "defaultMaxIterations": 15,    // Max iterations (0 = unlimited)
+    "cleanupWorktree": false,      // Auto-remove worktree on cancel
+    "defaultAudit": true,          // Run auditor after each coding iteration
+    "model": "",                   // Model override for loop sessions
+    "minAudits": 1,                // Minimum audit iterations before completion
+    "stallTimeoutMs": 60000        // Stall detection timeout (60s)
   },
+
+  // Docker sandbox configuration for isolated loop execution
   "sandbox": {
-    "mode": "off",
-    "image": "ocm-sandbox:latest"
+    "mode": "off",                 // Sandbox mode: "off" or "docker"
+    "image": "ocm-sandbox:latest"  // Docker image for sandbox containers
   },
+
+  // TUI sidebar widget configuration
   "tui": {
-    "sidebar": true,
-    "showLoops": true,
-    "showVersion": true
+    "sidebar": true,               // Show memory sidebar in OpenCode TUI
+    "showLoops": true,             // Display loop status in sidebar
+    "showVersion": true            // Show plugin version in sidebar title
   }
 }
 ```
