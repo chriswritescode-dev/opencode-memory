@@ -67,7 +67,11 @@ export interface LoopConfig {
   model?: string
   stallTimeoutMs?: number
   minAudits?: number
-  reuseSession?: boolean
+}
+
+export interface SandboxConfig {
+  mode: 'off' | 'docker'
+  image?: string
 }
 
 export interface ListMemoriesFilter {
@@ -121,6 +125,7 @@ export interface PluginConfig {
   defaultKvTtlMs?: number
   tui?: TuiConfig
   agents?: Record<string, AgentOverrideConfig>
+  sandbox?: SandboxConfig
 }
 
 export interface HealthStatus {
