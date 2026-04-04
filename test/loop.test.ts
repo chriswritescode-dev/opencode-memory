@@ -168,7 +168,7 @@ describe('LoopService', () => {
     }
 
     const prompt = loopService.buildContinuationPrompt(state)
-    expect(prompt).toContain('[Loop iteration 1 | To stop: output <promise>COMPLETE_TASK</promise> (ONLY after all verification steps pass)]')
+    expect(prompt).toContain('[Loop iteration 1 | To stop: output <promise>COMPLETE_TASK</promise> (ONLY after all verification commands pass AND all phase acceptance criteria are met)]')
   })
 
   test('buildContinuationPrompt includes max iterations when no promise', () => {

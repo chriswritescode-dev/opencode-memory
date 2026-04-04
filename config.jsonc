@@ -42,8 +42,11 @@
     "defaultAudit": true,
     "model": "",
     "minAudits": 1,
-    "stallTimeoutMs": 60000,
-    "reuseSession": false
+    "stallTimeoutMs": 60000
+  },
+  "sandbox": {
+    "mode": "off",
+    "image": "ocm-sandbox:latest"
   },
   "tui": {
     "sidebar": true,
