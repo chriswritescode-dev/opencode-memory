@@ -10,6 +10,7 @@ import type { createLoopEventHandler } from '../hooks'
 import type { createMemoryInjectionHook } from '../hooks'
 import type { createOpencodeClient as createV2Client } from '@opencode-ai/sdk/v2'
 import type { PluginInput } from '@opencode-ai/plugin'
+import type { createSandboxManager } from '../sandbox/manager'
 
 const z = tool.schema
 export const scopeEnum = z.enum(['convention', 'decision', 'context']) as any
@@ -45,6 +46,7 @@ export interface ToolContext {
   getCurrentVec: () => VecService
   cleanup: () => Promise<void>
   input: PluginInput
+  sandboxManager: ReturnType<typeof createSandboxManager> | null
 }
 
 export function withDimensionWarning(mismatchState: DimensionMismatchState, result: string): string {
