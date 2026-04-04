@@ -99,11 +99,50 @@ KV entries are scoped to the current project and expire after 7 days. Use this f
 Present plans with:
 - **Objective**: What we're building and why
 - **Phases**: Ordered implementation steps, each with specific files to create/modify, what changes to make, and acceptance criteria
-- **Verification**: Concrete, runnable commands that prove the plan is complete. Every plan MUST include at least one verification step. Examples:
-  - Test commands: \`pnpm test\`, \`vitest run src/path/to/test.ts\`
-  - Type checking: \`pnpm tsc --noEmit\`, \`pnpm lint\`
-  - Runtime checks: curl commands, specific assertions about output
-  Plans without verification steps are incomplete. If no existing tests cover the changes, the plan MUST include a phase to write tests.
+- **Verification**: Concrete criteria the code agent can validate automatically inside the loop. Every plan MUST include verification. Plans without verification are incomplete.
+
+  **Verification tiers (prefer higher tiers):**
+
+  | Tier | Type | Example | Why |
+  |---|---|---|---|
+  | 1 | Targeted tests | \`vitest run src/services/loop.test.ts\` | Directly exercises the new code paths |
+  | 2 | Type/lint checks | \`pnpm tsc --noEmit\`, \`pnpm lint\` | Catches structural and convention errors |
+  | 3 | File assertions | "src/services/auth.ts exports \`validateToken(token: string): boolean\`" | Auditor can verify by reading code |
+  | 4 | Behavioral assertions | "Calling \`parseConfig({})\` returns default config, not throws" | Should be captured in a test |
+
+  **Do NOT use these as verification — they cannot be validated in an automated loop:**
+  - \`pnpm build\` — tests bundling, not correctness; slow and opaque
+  - \`curl\` / HTTP requests — requires a running server
+  - \`pnpm test\` (full suite without path) — too broad, may fail for unrelated reasons
+  - Manual checks ("verify the UI", "check the output looks right")
+  - External service dependencies (APIs, databases that may not be running)
+
+  **Test requirements for new code:**
+  When a plan adds new functions, modules, or significant logic, verification MUST include either:
+  - Existing tests that already cover the new code paths (cite the specific test file)
+  - A dedicated phase to write targeted tests, specifying: what function/behavior to test, happy path, error cases, and edge cases
+
+  When tests are required, they must actually exercise the code — not just exist. The auditor will verify test quality.
+
+  **Per-phase acceptance criteria:**
+  Each phase MUST have its own acceptance criteria, not just a global verification section. This gives the code agent clear milestones and the auditor specific checkpoints per iteration.
+
+  **Good verification example:**
+  \`\`\`
+  ## Verification
+  1. \`vitest run test/loop.test.ts\` — all tests pass
+  2. \`pnpm tsc --noEmit\` — no type errors
+  3. \`src/services/loop.ts\` exports \`buildAuditPrompt\` accepting \`LoopState\`, returning \`string\`
+  4. New tests in \`test/loop.test.ts\` cover: empty state, state with findings, long prompt truncation
+  \`\`\`
+
+  **Bad verification example:**
+  \`\`\`
+  ## Verification
+  1. Run \`pnpm build\` — builds successfully
+  2. Start the server and test manually
+  3. Everything should work
+  \`\`\`
 - **Decisions**: Architectural choices made during planning with rationale
 - **Conventions**: Existing project conventions that must be followed
 - **Key Context**: Relevant code patterns, file locations, integration points, and dependencies discovered during research

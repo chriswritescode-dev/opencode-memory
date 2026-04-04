@@ -5,7 +5,8 @@ import { MAX_RETRIES, MAX_CONSECUTIVE_STALLS } from '../services/loop'
 import type { Logger, PluginConfig, LoopConfig } from '../types'
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
 import { execSync, spawnSync } from 'child_process'
-import { resolve } from 'path'
+import { resolve, join } from 'path'
+import type { createSandboxManager } from '../sandbox/manager'
 
 export interface LoopEventHandler {
   onEvent(input: { event: { type: string; properties?: Record<string, unknown> } }): Promise<void>
@@ -22,12 +23,14 @@ export function createLoopEventHandler(
   v2Client: OpencodeClient,
   logger: Logger,
   getConfig: () => PluginConfig,
+  sandboxManager?: ReturnType<typeof createSandboxManager>,
 ): LoopEventHandler {
   const minAudits = loopService.getMinAudits()
   const retryTimeouts = new Map<string, NodeJS.Timeout>()
   const lastActivityTime = new Map<string, number>()
   const stallWatchdogs = new Map<string, NodeJS.Timeout>()
   const consecutiveStalls = new Map<string, number>()
+  const watchdogRunning = new Map<string, boolean>()
   const stateLocks = new Map<string, Promise<void>>()
 
   function withStateLock(worktreeName: string, fn: () => Promise<void>): Promise<void> {
@@ -51,6 +54,15 @@ export function createLoopEventHandler(
     let cleaned = false
 
     try {
+      // Remove the opencode.jsonc file we wrote for permissions - don't commit it
+      try {
+        const { unlinkSync } = await import('fs')
+        unlinkSync(join(state.worktreeDir, 'opencode.jsonc'))
+        logger.log(`Loop: removed opencode.jsonc before commit`)
+      } catch {
+        // File may not exist, ignore
+      }
+
       const addResult = spawnSync('git', ['add', '-A'], { cwd: state.worktreeDir, encoding: 'utf-8' })
       if (addResult.status !== 0) {
         throw new Error(addResult.stderr || 'git add failed')
@@ -103,6 +115,7 @@ export function createLoopEventHandler(
     }
     lastActivityTime.delete(worktreeName)
     consecutiveStalls.delete(worktreeName)
+    watchdogRunning.delete(worktreeName)
   }
 
   function startWatchdog(worktreeName: string): void {
@@ -113,56 +126,68 @@ export function createLoopEventHandler(
     const stallTimeout = loopService.getStallTimeoutMs()
 
     const interval = setInterval(async () => {
-      const lastActivity = lastActivityTime.get(worktreeName)
-      if (!lastActivity) return
-
-      const elapsed = Date.now() - lastActivity
-      if (elapsed < stallTimeout) return
-
-      const state = loopService.getActiveState(worktreeName)
-      if (!state?.active) {
-        stopWatchdog(worktreeName)
-        return
-      }
-
-      const sessionId = state.sessionId
+      if (watchdogRunning.get(worktreeName)) return
+      watchdogRunning.set(worktreeName, true)
       try {
-        const statusResult = await v2Client.session.status({ directory: state.worktreeDir })
-        const statuses = (statusResult.data ?? {}) as Record<string, { type: string }>
+        const lastActivity = lastActivityTime.get(worktreeName)
+        if (!lastActivity) return
 
-        const status = statuses[sessionId]?.type
-        const hasActiveWork = status === 'busy' || status === 'retry' || status === 'compact'
+        const elapsed = Date.now() - lastActivity
+        if (elapsed < stallTimeout) return
 
-        if (hasActiveWork) {
-          lastActivityTime.set(worktreeName, Date.now())
-          logger.log(`Loop watchdog: worktree ${worktreeName} has active work, resetting timer`)
+        const state = loopService.getActiveState(worktreeName)
+        if (!state?.active) {
+          stopWatchdog(worktreeName)
           return
         }
-      } catch (err) {
-        logger.error(`Loop watchdog: failed to check session status`, err)
-        return
-      }
 
-      const stallCount = (consecutiveStalls.get(worktreeName) ?? 0) + 1
-      consecutiveStalls.set(worktreeName, stallCount)
-      lastActivityTime.set(worktreeName, Date.now())
+        const sessionId = state.sessionId
+        let statusCheckFailed = false
+        try {
+          const statusResult = await v2Client.session.status({ directory: state.worktreeDir })
+          const statuses = (statusResult.data ?? {}) as Record<string, { type: string }>
 
-      if (stallCount >= MAX_CONSECUTIVE_STALLS) {
-        logger.error(`Loop watchdog: worktree ${worktreeName} exceeded max consecutive stalls (${MAX_CONSECUTIVE_STALLS}), terminating`)
-        await terminateLoop(worktreeName, state, 'stall_timeout')
-        return
-      }
+          const status = statuses[sessionId]?.type
+          const hasActiveWork = status === 'busy' || status === 'retry'
 
-      logger.log(`Loop watchdog: stall detected for worktree ${worktreeName} (${stallCount}/${MAX_CONSECUTIVE_STALLS}), re-triggering ${state.phase} phase`)
-
-      try {
-        if (state.phase === 'auditing') {
-          await handleAuditingPhase(worktreeName, state)
-        } else {
-          await handleCodingPhase(worktreeName, state)
+          if (hasActiveWork) {
+            lastActivityTime.set(worktreeName, Date.now())
+            logger.log(`Loop watchdog: worktree ${worktreeName} has active work (${status}), resetting timer`)
+            return
+          }
+        } catch (err) {
+          logger.error(`Loop watchdog: failed to check session status, treating as stall`, err)
+          statusCheckFailed = true
         }
-      } catch (err) {
-        await handlePromptError(worktreeName, state, `watchdog recovery in ${state.phase} phase`, err)
+
+        const stallCount = (consecutiveStalls.get(worktreeName) ?? 0) + 1
+        consecutiveStalls.set(worktreeName, stallCount)
+        lastActivityTime.set(worktreeName, Date.now())
+
+        if (stallCount >= MAX_CONSECUTIVE_STALLS) {
+          logger.error(`Loop watchdog: worktree ${worktreeName} exceeded max consecutive stalls (${MAX_CONSECUTIVE_STALLS}), terminating`)
+          await terminateLoop(worktreeName, state, 'stall_timeout')
+          return
+        }
+
+        logger.log(`Loop watchdog: stall #${stallCount}/${MAX_CONSECUTIVE_STALLS} for ${worktreeName} (phase=${state.phase}, elapsed=${elapsed}ms, statusCheckFailed=${statusCheckFailed}), re-triggering`)
+
+        await withStateLock(worktreeName, async () => {
+          const freshState = loopService.getActiveState(worktreeName)
+          if (!freshState?.active) return
+
+          try {
+            if (freshState.phase === 'auditing') {
+              await handleAuditingPhase(worktreeName, freshState)
+            } else {
+              await handleCodingPhase(worktreeName, freshState)
+            }
+          } catch (err) {
+            await handlePromptError(worktreeName, freshState, `watchdog recovery in ${freshState.phase} phase`, err)
+          }
+        })
+      } finally {
+        watchdogRunning.set(worktreeName, false)
       }
     }, stallTimeout)
 
@@ -239,6 +264,15 @@ export function createLoopEventHandler(
     if (reason === 'completed' || reason === 'cancelled') {
       commitResult = await commitAndCleanupWorktree(state)
     }
+
+    if (state.sandbox && state.sandboxContainerName && sandboxManager) {
+      try {
+        await sandboxManager.stop(state.worktreeName)
+        logger.log(`Loop: stopped sandbox container for ${state.worktreeName}`)
+      } catch (err) {
+        logger.error(`Loop: failed to stop sandbox container`, err)
+      }
+    }
   }
 
   async function handlePromptError(worktreeName: string, state: LoopState, context: string, err: unknown, retryFn?: () => Promise<void>): Promise<void> {
@@ -308,32 +342,6 @@ export function createLoopEventHandler(
   }
 
   async function rotateSession(worktreeName: string, state: LoopState): Promise<string> {
-    const currentConfig = getConfig()
-
-    if (currentConfig.loop?.reuseSession) {
-      try {
-        const messagesResult = await v2Client.session.messages({
-          sessionID: state.sessionId,
-          directory: state.worktreeDir,
-        })
-        const messages = (messagesResult.data ?? []) as Array<{ info: { id: string } }>
-        for (const msg of messages) {
-          await v2Client.session.deleteMessage({
-            sessionID: state.sessionId,
-            messageID: msg.info.id,
-            directory: state.worktreeDir,
-          })
-        }
-        logger.log(`Loop: cleared ${messages.length} messages from session ${state.sessionId} (reuseSession mode)`)
-      } catch (err) {
-        logger.error(`Loop: failed to clear messages, session may have stale context`, err)
-      }
-
-      stopWatchdog(worktreeName)
-      startWatchdog(worktreeName)
-      return state.sessionId
-    }
-
     const oldSessionId = state.sessionId
 
     const createParams = {
@@ -778,20 +786,18 @@ export function createLoopEventHandler(
       const state = loopService.getActiveState(worktreeName)
       if (!state || !state.active) return
 
+      if (state.sessionId !== sessionId) {
+        logger.log(`Loop: ignoring stale idle event for session ${sessionId} (current: ${state.sessionId})`)
+        return
+      }
+
       try {
-        // Re-check state right before calling phase handler as extra safety
-        const freshState = loopService.getActiveState(worktreeName)
-        if (!freshState?.active) {
-          logger.log(`Loop: loop ${worktreeName} was terminated, skipping phase handler`)
-          return
-        }
-        
         startWatchdog(worktreeName)
         
-        if (freshState.phase === 'auditing') {
-          await handleAuditingPhase(worktreeName, freshState)
+        if (state.phase === 'auditing') {
+          await handleAuditingPhase(worktreeName, state)
         } else {
-          await handleCodingPhase(worktreeName, freshState)
+          await handleCodingPhase(worktreeName, state)
         }
       } catch (err) {
         const freshState = loopService.getActiveState(worktreeName)
@@ -815,6 +821,7 @@ export function createLoopEventHandler(
     }
     lastActivityTime.clear()
     consecutiveStalls.clear()
+    watchdogRunning.clear()
     stateLocks.clear()
     logger.log('Loop: cleared all retry timeouts')
   }

@@ -57,9 +57,12 @@ Diffs alone are not enough. After getting the diff:
 
 **Behavior Changes** — If a behavioral change is introduced, raise it (especially if possibly unintentional).
 
-**Plan Compliance** — When reviewing loop iterations, check whether the implementation satisfies the plan's stated acceptance criteria and verification steps.
-- If the task context includes verification commands (test, lint, type check), check whether they were run and passed
-- If acceptance criteria from the plan are not met, report as a **warning** with the specific unmet criterion
+**Plan Compliance** — When reviewing loop iterations, rigorously verify the implementation against the plan's stated acceptance criteria and verification steps.
+- Check **per-phase acceptance criteria**: each plan phase should have its own criteria. Verify every phase that has been implemented so far.
+- If verification commands are listed (targeted tests, type check, lint), confirm they were run AND passed. If you can't confirm, run them yourself.
+- If the plan required tests to be written, verify the tests actually exercise the stated scenarios — not just that they exist. Tests that pass trivially (empty assertions, mocked everything) do not satisfy the requirement.
+- If file-level assertions are listed (e.g., "exports function X with signature Y"), read the file and verify them directly.
+- Report **unmet acceptance criteria as bug severity** — they block loop completion. Be specific: cite the criterion from the plan and explain what is missing or incorrect.
 
 ## Before You Flag Something
 
