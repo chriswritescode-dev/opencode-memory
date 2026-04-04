@@ -1,6 +1,7 @@
 import { tool } from '@opencode-ai/plugin'
 import { execSync, spawnSync } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { resolve } from 'path'
 import type { ToolContext } from './types'
 import { withDimensionWarning } from './types'
@@ -11,7 +12,7 @@ import { formatSessionOutput, formatAuditResult } from '../utils/loop-format'
 import { fetchSessionOutput, MAX_RETRIES, type LoopState, type LoopSessionOutput } from '../services/loop'
 
 const z = tool.schema
-const DEFAULT_PLAN_COMPLETION_PROMISE = 'ALL_PHASES_COMPLETE'
+const DEFAULT_PLAN_COMPLETION_PROMISE = '<promise>ALL_PHASES_COMPLETE</promise>'
 
 interface LoopSetupOptions {
   prompt: string
@@ -30,7 +31,7 @@ async function setupLoop(
   ctx: ToolContext,
   options: LoopSetupOptions,
 ): Promise<string> {
-  const { v2, directory, config, loopService, loopHandler, logger } = ctx
+  const { v2, directory, config, loopService, loopHandler, logger, sandboxManager } = ctx
   const autoWorktreeName = options.worktreeName ?? `loop-${slugify(options.sessionTitle.replace(/^Loop:\s*/i, ''))}`
   const projectDir = directory
   const maxIter = options.maxIterations ?? config.loop?.defaultMaxIterations ?? 0
@@ -104,6 +105,36 @@ async function setupLoop(
     }
   }
 
+  if (loopContext.worktree) {
+    try {
+      const loopConfig = JSON.stringify({
+        permission: {
+          bash: { '*': 'allow', 'git push *': 'deny' },
+          external_directory: { '*': 'deny' },
+        },
+      }, null, 2)
+      writeFileSync(join(loopContext.directory, 'opencode.jsonc'), loopConfig)
+      logger.log(`loop: wrote loop opencode.jsonc to ${loopContext.directory}`)
+    } catch (err) {
+      logger.error(`loop: failed to write opencode.jsonc`, err)
+    }
+  }
+
+  let sandboxContainerName: string | undefined
+  const sandboxEnabled = config.sandbox?.mode === 'docker' && !!sandboxManager && !!options.worktree
+
+  if (sandboxEnabled) {
+    try {
+      const result = await sandboxManager!.start(autoWorktreeName, loopContext.directory)
+      sandboxContainerName = result.containerName
+      logger.log(`Sandbox container ${sandboxContainerName} started for loop ${autoWorktreeName}`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      logger.error(`loop: failed to start sandbox container`, err)
+      return `Failed to start sandbox container: ${message}`
+    }
+  }
+
   const state: LoopState = {
     active: true,
     sessionId: loopContext.sessionId,
@@ -120,6 +151,8 @@ async function setupLoop(
     errorCount: 0,
     auditCount: 0,
     worktree: options.worktree,
+    sandbox: sandboxEnabled,
+    sandboxContainerName,
   }
 
   loopService.setState(autoWorktreeName, state)
@@ -128,7 +161,7 @@ async function setupLoop(
 
   let promptText = options.prompt
   if (options.completionPromise) {
-    promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following tag exactly: <promise>${options.completionPromise}</promise>\n\nDo NOT output this tag until every phase is truly complete. The loop will continue until this signal is detected.`
+    promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${options.completionPromise}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
   }
 
   const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
@@ -152,6 +185,13 @@ async function setupLoop(
   if (promptResult.error) {
     logger.error(`loop: failed to send prompt`, promptResult.error)
     loopService.deleteState(autoWorktreeName)
+    if (sandboxEnabled) {
+      try {
+        await sandboxManager!.stop(autoWorktreeName)
+      } catch (sbxErr) {
+        logger.error(`loop: failed to stop sandbox container on prompt failure`, sbxErr)
+      }
+    }
     if (options.worktree) {
       try {
         await v2.worktree.remove({ worktreeRemoveInput: { directory: loopContext.directory } })
@@ -358,6 +398,17 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
           loopService.deleteState(stoppedState.worktreeName!)
 
+          const restartSandbox = config.sandbox?.mode === 'docker' && !!ctx.sandboxManager
+          if (restartSandbox) {
+            try {
+              const sbxResult = await ctx.sandboxManager!.start(stoppedState.worktreeName!, stoppedState.worktreeDir!)
+              logger.log(`memory-loop-restart: started sandbox container ${sbxResult.containerName}`)
+            } catch (err) {
+              logger.error(`memory-loop-restart: failed to start sandbox container`, err)
+              return `Restart failed: could not start sandbox container.`
+            }
+          }
+
           const newState: LoopState = {
             active: true,
             sessionId: newSessionId,
@@ -374,6 +425,10 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
             errorCount: 0,
             auditCount: 0,
             worktree: stoppedState.worktree,
+            sandbox: restartSandbox,
+            sandboxContainerName: restartSandbox
+              ? ctx.sandboxManager?.docker.containerName(stoppedState.worktreeName!)
+              : undefined,
           }
 
           loopService.setState(stoppedState.worktreeName!, newState)
@@ -381,7 +436,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
           let promptText = stoppedState.prompt ?? ''
           if (stoppedState.completionPromise) {
-            promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following tag exactly: <promise>${stoppedState.completionPromise}</promise>\n\nDo NOT output this tag until every phase is truly complete. The loop will continue until this signal is detected.`
+            promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${stoppedState.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
           }
 
           const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
@@ -407,6 +462,13 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           if (promptResult.error) {
             logger.error(`memory-loop-restart: failed to send prompt`, promptResult.error)
             loopService.deleteState(stoppedState.worktreeName!)
+            if (restartSandbox) {
+              try {
+                await ctx.sandboxManager!.stop(stoppedState.worktreeName!)
+              } catch (sbxErr) {
+                logger.error(`memory-loop-restart: failed to stop sandbox on prompt failure`, sbxErr)
+              }
+            }
             return `Restart failed: could not send prompt to new session.`
           }
 

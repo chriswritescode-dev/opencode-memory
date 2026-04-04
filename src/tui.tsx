@@ -8,6 +8,7 @@ import { execSync } from 'child_process'
 import { Database } from 'bun:sqlite'
 import { VERSION } from './version'
 import { compareVersions } from './utils/upgrade'
+import { fetchSessionStats, type SessionStats } from './utils/session-stats'
 
 type TuiOptions = {
   sidebar: boolean
@@ -146,27 +147,55 @@ function cancelLoop(projectId: string, loopName: string): string | null {
   }
 }
 
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
+}
+
+function formatDuration(ms: number): string {
+  const hours = Math.floor(ms / (1000 * 60 * 60))
+  const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60))
+  const seconds = Math.floor((ms % (1000 * 60)) / 1000)
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  }
+  return `${seconds}s`
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  return text.slice(0, maxLength - 3) + '...'
+}
+
 function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
   const theme = () => props.api.theme.current
   const loop = props.loop
+  const [stats, setStats] = createSignal<SessionStats | null>(null)
+  const [loading, setLoading] = createSignal(true)
+
+  const directory = props.api.state.path.directory
+
+  createEffect(() => {
+    if (loop.sessionId && directory) {
+      setLoading(true)
+      fetchSessionStats(props.api, loop.sessionId, directory).then((result) => {
+        setStats(result)
+        setLoading(false)
+      }).catch(() => {
+        setStats(null)
+        setLoading(false)
+      })
+    } else {
+      setLoading(false)
+    }
+  })
 
   const options = () => {
     const opts: Array<{ title: string; value: string; description?: string; onSelect?: () => void }> = []
 
-    if (loop.worktreeBranch) {
-      opts.push({
-        title: `Branch: ${loop.worktreeBranch}`,
-        value: 'branch',
-        description: loop.worktreeDir,
-      })
-    }
-
     if (loop.active) {
-      const max = loop.maxIterations > 0 ? `/${loop.maxIterations}` : ''
-      opts.push({
-        title: `Status: ${loop.phase} · iteration ${loop.iteration}${max}`,
-        value: 'status',
-      })
       opts.push({
         title: 'Cancel loop',
         value: 'cancel',
@@ -187,33 +216,137 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
           })
         },
       })
-    } else if (loop.terminationReason === 'completed') {
-      opts.push({
-        title: `Completed: ${loop.iteration} iteration${loop.iteration !== 1 ? 's' : ''}`,
-        value: 'completed',
-      })
-    } else {
-      opts.push({
-        title: `Ended: ${loop.terminationReason?.replace(/_/g, ' ') ?? 'unknown'}`,
-        value: 'ended',
-      })
     }
+
+    opts.push({
+      title: 'Close',
+      value: 'close',
+    })
 
     return opts
   }
 
+  const statusBadge = () => {
+    if (loop.active) return { text: loop.phase, color: loop.phase === 'auditing' ? theme().warning : theme().success }
+    if (loop.terminationReason === 'completed') return { text: 'completed', color: theme().success }
+    if (loop.terminationReason === 'cancelled' || loop.terminationReason === 'user_aborted') return { text: 'cancelled', color: theme().textMuted }
+    return { text: 'ended', color: theme().error }
+  }
+
   return (
-    <props.api.ui.DialogSelect
-      title={loop.name}
-      options={options()}
-      onSelect={(opt) => {
-        if (opt.onSelect) {
-          opt.onSelect()
-          return
-        }
-        props.api.ui.dialog.clear()
-      }}
-    />
+    <box flexDirection="column" gap={1}>
+      <box flexDirection="column" gap={1} paddingBottom={1}>
+        <box flexDirection="row" gap={1} alignItems="center">
+          <text fg={theme().text}>
+            <b>{loop.name}</b>
+          </text>
+          <text fg={statusBadge().color}>
+            <b>[{statusBadge().text}]</b>
+          </text>
+          <Show when={loop.worktreeBranch}>
+            <text fg={theme().textMuted}>·</text>
+            <text fg={theme().textMuted}>{loop.worktreeBranch}</text>
+          </Show>
+        </box>
+        <box>
+          <text fg={theme().textMuted}>
+            Iteration {loop.iteration}{loop.maxIterations > 0 ? `/${loop.maxIterations}` : ''}
+          </text>
+        </box>
+      </box>
+
+      <Show when={loading()}>
+        <box paddingBottom={1}>
+          <text fg={theme().textMuted}>Loading stats...</text>
+        </box>
+      </Show>
+
+      <Show when={!loading()}>
+        <box flexDirection="column" gap={1}>
+          <Show when={stats()} fallback={
+            <box>
+              <text fg={theme().textMuted}>Session stats unavailable</text>
+            </box>
+          }>
+            <box flexDirection="column" gap={1}>
+              <box>
+                <text fg={theme().text}>
+                  <span style={{ fg: theme().textMuted }}>Session: </span>
+                  {loop.sessionId.slice(0, 8)}...
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <span style={{ fg: theme().textMuted }}>Phase: </span>
+                  {loop.phase}
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <span style={{ fg: theme().textMuted }}>Messages: </span>
+                  {stats()!.messages.total} total ({stats()!.messages.assistant} assistant)
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <span style={{ fg: theme().textMuted }}>Tokens: </span>
+                  {formatTokens(stats()!.tokens.input)} in / {formatTokens(stats()!.tokens.output)} out / {formatTokens(stats()!.tokens.reasoning)} reasoning
+                </text>
+              </box>
+              <box>
+                <text fg={theme().text}>
+                  <span style={{ fg: theme().textMuted }}>Cost: </span>
+                  ${stats()!.cost.toFixed(4)}
+                </text>
+              </box>
+              <Show when={stats()!.fileChanges}>
+                <box>
+                  <text fg={theme().text}>
+                    <span style={{ fg: theme().textMuted }}>Files: </span>
+                    {stats()!.fileChanges!.files} changed (+{stats()!.fileChanges!.additions}/-{stats()!.fileChanges!.deletions})
+                  </text>
+                </box>
+              </Show>
+              <Show when={stats()!.timing}>
+                <box>
+                  <text fg={theme().text}>
+                    <span style={{ fg: theme().textMuted }}>Duration: </span>
+                    {formatDuration(stats()!.timing!.durationMs)}
+                  </text>
+                </box>
+              </Show>
+            </box>
+          </Show>
+        </box>
+      </Show>
+
+      <Show when={stats()?.lastAssistantMessage?.text}>
+        <box flexDirection="column" gap={1} paddingTop={1}>
+          <box>
+            <text fg={theme().text}><b>Latest Output</b></text>
+          </box>
+          <box borderStyle="rounded" borderColor={theme().border} paddingX={1} paddingY={1}>
+            <text fg={theme().textMuted} wrapMode="word">
+              {truncate(stats()!.lastAssistantMessage!.text, 300)}
+            </text>
+          </box>
+        </box>
+      </Show>
+
+      <box paddingTop={1}>
+        <props.api.ui.DialogSelect
+          title="Actions"
+          options={options()}
+          onSelect={(opt) => {
+            if (opt.onSelect) {
+              opt.onSelect()
+              return
+            }
+            props.api.ui.dialog.clear()
+          }}
+        />
+      </box>
+    </box>
   )
 }
 

@@ -57,6 +57,8 @@ export interface LoopState {
   completedAt?: string
   worktree?: boolean
   modelFailed?: boolean
+  sandbox?: boolean
+  sandboxContainerName?: string
 }
 
 export interface LoopService {
@@ -123,19 +125,24 @@ export function createLoopService(
   }
 
   function checkCompletionPromise(text: string, promise: string): boolean {
-    const match = text.match(/<promise>([\s\S]*?)<\/promise>/)
-    if (!match) {
-      return false
+    return text.includes(promise)
+  }
+
+  function redactCompletionSignal(text: string, promise: string): string {
+    let result = text
+    const inner = promise.replace(/<\/?promise>/g, '').trim()
+    if (inner) {
+      result = result.replaceAll(inner, '[SIGNAL_REDACTED]')
     }
-    const extracted = match[1].trim().replace(/\s+/g, ' ')
-    return extracted === promise
+    result = result.replaceAll(promise, '[SIGNAL_REDACTED]')
+    return result
   }
 
   function buildContinuationPrompt(state: LoopState, auditFindings?: string): string {
     let systemLine = `Loop iteration ${state.iteration ?? 0}`
 
     if (state.completionPromise) {
-      systemLine += ` | To stop: output <promise>${state.completionPromise}</promise> (ONLY after all verification steps pass)`
+      systemLine += ` | To stop: output ${state.completionPromise} (ONLY after all verification commands pass AND all phase acceptance criteria are met)`
     } else if ((state.maxIterations ?? 0) > 0) {
       systemLine += ` / ${state.maxIterations}`
     } else {
@@ -145,10 +152,13 @@ export function createLoopService(
     let prompt = `[${systemLine}]\n\n${state.prompt ?? ''}`
 
     if (auditFindings) {
+      const cleanedFindings = state.completionPromise
+        ? redactCompletionSignal(auditFindings, state.completionPromise)
+        : auditFindings
       const completionInstruction = state.completionPromise
         ? '\n\nAfter fixing all issues, output the completion signal.'
         : ''
-      prompt += `\n\n---\nThe code auditor reviewed your changes. You MUST address all bugs and convention violations below — do not dismiss findings as unrelated to the task. Fix them directly without creating a plan or asking for approval.\n\n${auditFindings}${completionInstruction}`
+      prompt += `\n\n---\nThe code auditor reviewed your changes. You MUST address all bugs and convention violations below — do not dismiss findings as unrelated to the task. Fix them directly without creating a plan or asking for approval.\n\n${cleanedFindings}${completionInstruction}`
     }
 
     const outstandingFindings = getOutstandingFindings(state.worktreeBranch)

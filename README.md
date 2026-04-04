@@ -38,6 +38,7 @@ The local embedding model downloads automatically on install. For API-based embe
 - **CLI Tools** - Export, import, list, stats, cleanup, upgrade, status, and cancel commands via `ocm-mem` binary
 - **Dimension Mismatch Detection** - Detects embedding model changes and guides recovery via reindex
 - **Iterative Development Loops** - Autonomous coding/auditing loop with worktree isolation, session rotation, stall detection, and review finding persistence
+- **Docker Sandbox** - Run loops inside isolated Docker containers with bind-mounted project directory, automatic container lifecycle, and selective tool routing (bash, glob, grep)
 
 ## Agents
 
@@ -269,6 +270,10 @@ You can edit this file to customize settings. The file is created only if it doe
     "minAudits": 1,
     "stallTimeoutMs": 60000
   },
+  "sandbox": {
+    "mode": "off",
+    "image": "ocm-sandbox:latest"
+  },
   "tui": {
     "sidebar": true,
     "showLoops": true,
@@ -344,6 +349,10 @@ When enabled, logs are written to the specified file with timestamps. The log fi
 - `loop.stallTimeoutMs` - Watchdog stall detection timeout in milliseconds (default: `60000`)
 - `loop.minAudits` - Minimum audit iterations required before completion (default: `1`)
 
+#### Sandbox
+- `sandbox.mode` - Sandbox mode: `"off"` or `"docker"` (default: `"off"`)
+- `sandbox.image` - Docker image for sandbox containers (default: `"ocm-sandbox:latest"`)
+
 #### Top-level
 - `defaultKvTtlMs` - Default TTL for KV store entries in milliseconds (default: `604800000` / 7 days)
 
@@ -397,8 +406,8 @@ After the architect presents a plan, the user approves via one of four execution
 
 - **New session** — Creates a new Code session via `memory-plan-execute`
 - **Execute here** — Executes the plan in the current session (code agent takes over immediately)
-- **Loop (worktree)** — Runs the plan in an isolated git worktree with iterative coding/auditing via `memory-loop`
-- **Loop** — Same as loop (worktree) but runs in the current directory (no worktree isolation)
+- **Loop (worktree)** — Runs the plan in an isolated git worktree with iterative coding/auditing via `memory-loop`. When `config.sandbox.mode` is `"docker"`, the loop automatically uses Docker sandbox.
+- **Loop** — Same as loop (worktree) but runs in the current directory (no worktree isolation, no sandbox)
 
 Set `executionModel` in your config to a fast model (e.g., Haiku) and use a smart model (e.g., Opus) for the architect session.
 
@@ -459,6 +468,84 @@ The loop completes when the Code agent outputs the completion promise. It auto-t
 By default, loops run in an isolated git worktree. Set `inPlace: true` to run in the current directory instead (skips worktree creation, auto-commit, and cleanup).
 
 See the [full documentation](https://chriswritescode-dev.github.io/opencode-memory/features/memory/#loop) for details on worktree management, model configuration, and termination conditions.
+
+## Docker Sandbox
+
+Run loop iterations inside an isolated Docker container. Three tools (`bash`, `glob`, `grep`) execute inside the container via `docker exec`, while `read`/`write`/`edit` operate on the host filesystem. Your project directory is bind-mounted at `/workspace` for instant file sharing.
+
+### Prerequisites
+
+- Docker running on your machine
+
+### Setup
+
+**1. Build the sandbox image:**
+
+```bash
+docker build -t ocm-sandbox:latest container/
+```
+
+The image includes Node.js 24, pnpm, Bun, Python 3 + uv, ripgrep, git, and jq.
+
+**2. Enable sandbox mode in your config** (`~/.config/opencode/memory-config.jsonc`):
+
+```jsonc
+{
+  "sandbox": {
+    "mode": "docker",
+    "image": "ocm-sandbox:latest"
+  }
+}
+```
+
+**3. Restart OpenCode.**
+
+### Usage
+
+Start a sandbox loop via the architect plan approval flow (select "Loop (worktree)") or directly with the `memory-loop` tool:
+
+```
+memory-loop with worktree: true
+```
+
+Sandbox is automatically enabled when `config.sandbox.mode` is set to `"docker"` and the loop uses `worktree: true`. The loop:
+1. Creates a git worktree (if `worktree: true`)
+2. Starts a Docker container with the worktree directory bind-mounted at `/workspace`
+3. Redirects `bash`, `glob`, and `grep` tool calls into the container
+4. Cleans up the container on loop completion or cancellation
+
+### How It Works
+
+- **Bind mount** -- the project directory is mounted directly into the container at `/workspace`. No sync daemon, no file copying. Changes are visible instantly on both sides.
+- **Tool redirection** -- `bash`, `glob`, and `grep` route through `docker exec` when a session belongs to a sandbox loop. The `read`/`write`/`edit` tools operate on the host filesystem directly (compatible with host LSP).
+- **Git blocking** -- git commands are explicitly blocked inside the container. All git operations (commit, push, branch management) are handled by the loop system on the host.
+- **Host LSP** -- since files are shared via the bind mount, OpenCode's LSP servers on the host read the same files and provide diagnostics after writes and edits.
+- **Container lifecycle** -- one container per loop, automatically started and stopped. Container name format: `ocm-sandbox-<worktreeName>`.
+
+### Configuration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `sandbox.mode` | `"off"` | Set to `"docker"` to enable sandbox support |
+| `sandbox.image` | `"ocm-sandbox:latest"` | Docker image to use for sandbox containers |
+
+### Customizing the Image
+
+The `container/Dockerfile` is included in the project. To add project-specific tools (e.g., Go, Rust, additional language servers), edit the Dockerfile and rebuild:
+
+```bash
+docker build -t ocm-sandbox:latest container/
+```
+
+### Caveats
+
+- **Worktree required** -- sandbox only works with `worktree: true`. In-place loops (`worktree: false`) never use sandbox.
+- **Git blocked** -- git commands are explicitly blocked inside the container. All git operations are handled by the loop system on the host.
+- **No `tsc` global** -- TypeScript compiler is not globally available in the container. Use `pnpm tsc` or add it to your project dependencies.
+- **pnpm install caution** -- running `pnpm install` in the container writes `node_modules` to the host via the bind mount, potentially bloating worktree diffs.
+- **No network isolation** -- the container has full network access (no `--network=none` flag).
+- **No resource limits** -- no `--memory`, `--cpus`, or `--pids-limit` flags are applied.
+- **Orphan cleanup** -- orphaned containers from previous runs are automatically cleaned up on plugin startup.
 
 ## Documentation
 

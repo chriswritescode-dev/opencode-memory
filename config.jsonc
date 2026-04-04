@@ -44,6 +44,10 @@
     "minAudits": 1,
     "stallTimeoutMs": 60000
   },
+  "sandbox": {
+    "mode": "off",
+    "image": "ocm-sandbox:latest"
+  },
   "tui": {
     "sidebar": true,
     "showLoops": true,

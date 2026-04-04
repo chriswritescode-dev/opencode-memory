@@ -69,6 +69,11 @@ export interface LoopConfig {
   minAudits?: number
 }
 
+export interface SandboxConfig {
+  mode: 'off' | 'docker'
+  image?: string
+}
+
 export interface ListMemoriesFilter {
   scope?: MemoryScope
   limit?: number
@@ -120,6 +125,7 @@ export interface PluginConfig {
   defaultKvTtlMs?: number
   tui?: TuiConfig
   agents?: Record<string, AgentOverrideConfig>
+  sandbox?: SandboxConfig
 }
 
 export interface HealthStatus {
