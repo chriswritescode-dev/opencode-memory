@@ -195,14 +195,6 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
   const options = () => {
     const opts: Array<{ title: string; value: string; description?: string; onSelect?: () => void }> = []
 
-    if (loop.worktreeBranch) {
-      opts.push({
-        title: 'View branch',
-        value: 'branch',
-        description: `${loop.worktreeBranch}`,
-      })
-    }
-
     if (loop.active) {
       opts.push({
         title: 'Cancel loop',
@@ -224,16 +216,6 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
           })
         },
       })
-    } else if (loop.terminationReason === 'completed') {
-      opts.push({
-        title: `Completed: ${loop.iteration} iteration${loop.iteration !== 1 ? 's' : ''}`,
-        value: 'completed',
-      })
-    } else {
-      opts.push({
-        title: `Ended: ${loop.terminationReason?.replace(/_/g, ' ') ?? 'unknown'}`,
-        value: 'ended',
-      })
     }
 
     opts.push({
@@ -244,24 +226,43 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
     return opts
   }
 
-  
+  const statusBadge = () => {
+    if (loop.active) return { text: loop.phase, color: loop.phase === 'auditing' ? theme().warning : theme().success }
+    if (loop.terminationReason === 'completed') return { text: 'completed', color: theme().success }
+    if (loop.terminationReason === 'cancelled' || loop.terminationReason === 'user_aborted') return { text: 'cancelled', color: theme().textMuted }
+    return { text: 'ended', color: theme().error }
+  }
 
   return (
-    <box flexDirection="column">
-      <box paddingBottom={1}>
-        <text fg={theme().text}>
-          <b>{loop.name}</b>
-        </text>
+    <box flexDirection="column" gap={1}>
+      <box flexDirection="column" gap={1} paddingBottom={1}>
+        <box flexDirection="row" gap={1} alignItems="center">
+          <text fg={theme().text}>
+            <b>{loop.name}</b>
+          </text>
+          <text fg={statusBadge().color}>
+            <b>[{statusBadge().text}]</b>
+          </text>
+          <Show when={loop.worktreeBranch}>
+            <text fg={theme().textMuted}>·</text>
+            <text fg={theme().textMuted}>{loop.worktreeBranch}</text>
+          </Show>
+        </box>
+        <box>
+          <text fg={theme().textMuted}>
+            Iteration {loop.iteration}{loop.maxIterations > 0 ? `/${loop.maxIterations}` : ''}
+          </text>
+        </box>
       </box>
-      
+
       <Show when={loading()}>
         <box paddingBottom={1}>
           <text fg={theme().textMuted}>Loading stats...</text>
         </box>
       </Show>
-      
+
       <Show when={!loading()}>
-        <box flexDirection="column" gap={1} paddingX={1} paddingY={1}>
+        <box flexDirection="column" gap={1}>
           <Show when={stats()} fallback={
             <box>
               <text fg={theme().textMuted}>Session stats unavailable</text>
@@ -270,66 +271,69 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
             <box flexDirection="column" gap={1}>
               <box>
                 <text fg={theme().text}>
-                  <b>Session:</b> {loop.sessionId.slice(0, 8)}...
+                  <span style={{ fg: theme().textMuted }}>Session: </span>
+                  {loop.sessionId.slice(0, 8)}...
                 </text>
               </box>
               <box>
                 <text fg={theme().text}>
-                  <b>Phase:</b> {loop.phase}
+                  <span style={{ fg: theme().textMuted }}>Phase: </span>
+                  {loop.phase}
                 </text>
               </box>
               <box>
                 <text fg={theme().text}>
-                  <b>Iteration:</b> {loop.iteration}/{loop.maxIterations}
+                  <span style={{ fg: theme().textMuted }}>Messages: </span>
+                  {stats()!.messages.total} total ({stats()!.messages.assistant} assistant)
                 </text>
               </box>
               <box>
                 <text fg={theme().text}>
-                  <b>Tokens:</b> {formatTokens(stats()!.tokens.input)} in / {formatTokens(stats()!.tokens.output)} out / {formatTokens(stats()!.tokens.reasoning)} reasoning
+                  <span style={{ fg: theme().textMuted }}>Tokens: </span>
+                  {formatTokens(stats()!.tokens.input)} in / {formatTokens(stats()!.tokens.output)} out / {formatTokens(stats()!.tokens.reasoning)} reasoning
                 </text>
               </box>
               <box>
                 <text fg={theme().text}>
-                  <b>Cost:</b> ${stats()!.cost.toFixed(4)}
-                </text>
-              </box>
-              <box>
-                <text fg={theme().text}>
-                  <b>Messages:</b> {stats()!.messages.total} total ({stats()!.messages.assistant} assistant)
+                  <span style={{ fg: theme().textMuted }}>Cost: </span>
+                  ${stats()!.cost.toFixed(4)}
                 </text>
               </box>
               <Show when={stats()!.fileChanges}>
                 <box>
                   <text fg={theme().text}>
-                    <b>Files:</b> {stats()!.fileChanges!.files} changed (+{stats()!.fileChanges!.additions}/-{stats()!.fileChanges!.deletions})
+                    <span style={{ fg: theme().textMuted }}>Files: </span>
+                    {stats()!.fileChanges!.files} changed (+{stats()!.fileChanges!.additions}/-{stats()!.fileChanges!.deletions})
                   </text>
                 </box>
               </Show>
               <Show when={stats()!.timing}>
                 <box>
                   <text fg={theme().text}>
-                    <b>Duration:</b> {formatDuration(stats()!.timing!.durationMs)}
+                    <span style={{ fg: theme().textMuted }}>Duration: </span>
+                    {formatDuration(stats()!.timing!.durationMs)}
                   </text>
-                </box>
-              </Show>
-              <Show when={stats()?.lastAssistantMessage?.text}>
-                <box flexDirection="column" gap={1} paddingTop={1}>
-                  <box>
-                    <text fg={theme().text}><b>Last assistant message:</b></text>
-                  </box>
-                  <box borderStyle="rounded" borderColor={theme().border}>
-                    <text fg={theme().textMuted} wrapMode="word" paddingX={1} paddingY={1}>
-                      {stats()!.lastAssistantMessage!.text}
-                    </text>
-                  </box>
                 </box>
               </Show>
             </box>
           </Show>
         </box>
       </Show>
-      
-      <box>
+
+      <Show when={stats()?.lastAssistantMessage?.text}>
+        <box flexDirection="column" gap={1} paddingTop={1}>
+          <box>
+            <text fg={theme().text}><b>Latest Output</b></text>
+          </box>
+          <box borderStyle="rounded" borderColor={theme().border} paddingX={1} paddingY={1}>
+            <text fg={theme().textMuted} wrapMode="word">
+              {truncate(stats()!.lastAssistantMessage!.text, 300)}
+            </text>
+          </box>
+        </box>
+      </Show>
+
+      <box paddingTop={1}>
         <props.api.ui.DialogSelect
           title="Actions"
           options={options()}
