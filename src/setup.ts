@@ -148,10 +148,15 @@ function normalizeConfig(config: PluginConfig): PluginConfig {
     loop: config.loop ?? config.ralph,
     tui: config.tui,
     agents: config.agents,
+    sandbox: config.sandbox,
   }
   
   if (config.ralph && !config.loop) {
     console.warn('[memory] Config key "ralph" is deprecated, use "loop" instead')
+  }
+  
+  if (normalized.sandbox) {
+    normalized.sandbox.mode = normalized.sandbox.mode || 'off'
   }
   
   if (normalized.embedding) {
