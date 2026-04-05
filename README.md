@@ -409,9 +409,13 @@ The Loop Details dialog shows a detailed view of a single loop:
 - **Cancel loop** — abort the active loop session (visible only when loop is active)
 - **Close (esc)** — dismiss the dialog
 
+![Loop details dialog showing session stats, phase, and token usage](docs/images/loop-details.webp)
+
 ### Command Palette
 
 The `Memory: Show loops` command is registered in the command palette when loops exist for the current project. It opens a list of all **worktree loops** (large dialog), then drills into the Loop Details dialog for the selected loop (medium dialog) with a Back button to return to the list.
+
+![Loop search dialog showing a list of loops with their statuses](docs/images/search-loops.webp)
 
 ### Setup
 
