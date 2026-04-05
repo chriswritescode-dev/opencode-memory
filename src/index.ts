@@ -78,6 +78,9 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
 
     const loopService = createLoopService(kvService, projectId, logger, config.loop)
     migrateRalphKeys(kvService, projectId, logger).catch(() => {})
+
+    const activeSandboxLoops = loopService.listActive().filter(s => s.sandbox && s.worktreeName)
+
     const reconciledCount = loopService.reconcileStale()
     if (reconciledCount > 0) {
       logger.log(`Reconciled ${reconciledCount} stale loop(s) from previous session`)
@@ -97,9 +100,21 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     }
 
     if (sandboxManager) {
-      sandboxManager.cleanupOrphans().then((count) => {
+      const preserveWorktrees = activeSandboxLoops.map(s => s.worktreeName)
+      sandboxManager.cleanupOrphans(preserveWorktrees).then((count) => {
         if (count > 0) logger.log(`Cleaned up ${count} orphaned sandbox container(s)`)
       }).catch((err) => logger.error('Failed to cleanup orphaned containers', err))
+
+      for (const loop of activeSandboxLoops) {
+        sandboxManager.restore(loop.worktreeName, loop.worktreeDir, loop.startedAt)
+          .then(() => {
+            loopService.setState(loop.worktreeName, { ...loop, active: true })
+            logger.log(`Restored sandbox and reactivated loop for ${loop.worktreeName}`)
+          })
+          .catch(err =>
+            logger.error(`Failed to restore sandbox for ${loop.worktreeName}`, err)
+          )
+      }
     }
 
     const loopHandler = createLoopEventHandler(loopService, client, v2, logger, () => config, sandboxManager || undefined)

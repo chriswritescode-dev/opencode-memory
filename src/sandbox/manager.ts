@@ -18,7 +18,8 @@ interface SandboxManager {
   stop(worktreeName: string): Promise<void>
   getActive(worktreeName: string): ActiveSandbox | null
   isActive(worktreeName: string): boolean
-  cleanupOrphans(): Promise<number>
+  cleanupOrphans(preserveWorktrees?: string[]): Promise<number>
+  restore(worktreeName: string, projectDir: string, startedAt: string): Promise<void>
 }
 
 const activeSandboxes = new Map<string, ActiveSandbox>()
@@ -89,17 +90,57 @@ export function createSandboxManager(
     return activeSandboxes.has(worktreeName)
   }
 
-  async function cleanupOrphans(): Promise<number> {
+  async function cleanupOrphans(preserveWorktrees?: string[]): Promise<number> {
     const containers = await docker.listContainersByPrefix('ocm-sandbox-')
     let removed = 0
+
+    const preserveSet = preserveWorktrees
+      ? new Set(preserveWorktrees.map((wt) => docker.containerName(wt)))
+      : new Set<string>()
+
     for (const name of containers) {
+      if (preserveSet.has(name)) {
+        continue
+      }
       try {
         await docker.removeContainer(name)
         removed++
-      } catch {}
+        logger.log(`Removed orphaned sandbox container: ${name}`)
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        logger.error(`Failed to remove orphaned sandbox container ${name}: ${errMsg}`)
+      }
     }
-    activeSandboxes.clear()
+
+    if (!preserveWorktrees) {
+      activeSandboxes.clear()
+    } else {
+      for (const key of activeSandboxes.keys()) {
+        if (!preserveWorktrees.includes(key)) {
+          activeSandboxes.delete(key)
+        }
+      }
+    }
+
     return removed
+  }
+
+  async function restore(worktreeName: string, projectDir: string, startedAt: string): Promise<void> {
+    const containerName = docker.containerName(worktreeName)
+    const running = await docker.isRunning(containerName)
+
+    if (running) {
+      logger.log(`Sandbox container ${containerName} already running, repopulating map`)
+      const active: ActiveSandbox = {
+        containerName,
+        projectDir: resolve(projectDir),
+        startedAt,
+      }
+      activeSandboxes.set(worktreeName, active)
+    } else {
+      logger.log(`Sandbox container ${containerName} not running, starting new container`)
+      await start(worktreeName, projectDir)
+    }
   }
 
   return {
@@ -109,5 +150,6 @@ export function createSandboxManager(
     getActive,
     isActive,
     cleanupOrphans,
+    restore,
   }
 }
