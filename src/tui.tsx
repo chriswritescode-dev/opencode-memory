@@ -147,6 +147,77 @@ function cancelLoop(projectId: string, loopName: string): string | null {
   }
 }
 
+async function restartLoop(projectId: string, loopName: string, api: TuiPluginApi): Promise<string | null> {
+  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
+  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
+  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
+
+  if (!existsSync(dbPath)) return null
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath)
+    const key = `loop:${loopName}`
+    const now = Date.now()
+    const row = db.prepare('SELECT data, project_id FROM project_kv WHERE project_id = ? AND key = ? AND expires_at > ?').get(projectId, key, now) as { data: string; project_id: string } | null
+    if (!row) return null
+
+    const state = JSON.parse(row.data)
+    
+    if (state.active) {
+      try { await api.client.session.abort({ sessionID: state.sessionId }) } catch {}
+      const oldSessionKey = `loop-session:${state.sessionId}`
+      db.prepare('DELETE FROM project_kv WHERE project_id = ? AND key = ?').run(projectId, oldSessionKey)
+    }
+
+    const directory = state.worktreeDir
+    if (!directory) return null
+    const createResult = await api.client.session.create({ directory, title: loopName })
+    if (createResult.error || !createResult.data) return null
+    
+    const newSessionId = createResult.data.id
+
+    const sessionKey = `loop-session:${newSessionId}`
+    const ttl = 30 * 24 * 60 * 60 * 1000
+    db.prepare('INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+      projectId, sessionKey, JSON.stringify(loopName), now + ttl, now
+    )
+
+    const newState = {
+      ...state,
+      active: true,
+      sessionId: newSessionId,
+      phase: 'coding',
+      errorCount: 0,
+      auditCount: 0,
+      startedAt: new Date().toISOString(),
+      completedAt: undefined,
+      terminationReason: undefined,
+    }
+    db.prepare('UPDATE project_kv SET data = ?, updated_at = ? WHERE project_id = ? AND key = ?').run(
+      JSON.stringify(newState), now, projectId, key
+    )
+
+    let promptText = state.prompt ?? ''
+    if (state.completionPromise) {
+      promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${state.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
+    }
+
+    await api.client.session.promptAsync({
+      sessionID: newSessionId,
+      directory,
+      parts: [{ type: 'text' as const, text: promptText }],
+      agent: 'code',
+    })
+
+    return newSessionId
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
 function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
 }
@@ -212,6 +283,20 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: 
     props.api.ui.toast({
       message: sessionId ? `Cancelled loop: ${loop.name}` : `Loop ${loop.name} is not active`,
       variant: sessionId ? 'success' : 'info',
+      duration: 3000,
+    })
+  }
+
+  const handleRestart = async () => {
+    props.api.ui.dialog.clear()
+    const directory = props.api.state.path.directory
+    const pid = resolveProjectId(directory)
+    if (!pid) return
+    const newSessionId = await restartLoop(pid, loop.name, props.api)
+    const label = loop.active ? 'Force restarting' : 'Restarting'
+    props.api.ui.toast({
+      message: newSessionId ? `${label} loop: ${loop.name}` : `Failed to restart loop: ${loop.name}`,
+      variant: newSessionId ? 'success' : 'error',
       duration: 3000,
     })
   }
@@ -324,7 +409,11 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: 
           <text fg={theme().textMuted} onMouseUp={() => props.onBack!()}>Back</text>
         </Show>
         <Show when={loop.active}>
+          <text fg={theme().warning} onMouseUp={handleRestart}>Force Restart</text>
           <text fg={theme().error} onMouseUp={handleCancel}>Cancel loop</text>
+        </Show>
+        <Show when={!loop.active && loop.terminationReason !== 'completed'}>
+          <text fg={theme().success} onMouseUp={handleRestart}>Restart</text>
         </Show>
         <text fg={theme().textMuted} onMouseUp={() => props.api.ui.dialog.clear()}>Close (esc)</text>
       </box>

@@ -1915,3 +1915,162 @@ describe('Assistant Error Detection', () => {
     expect(terminatedState?.terminationReason).toContain('error_max_retries')
   })
 })
+
+describe('Force-restart behavior', () => {
+  let db: Database
+  let kvService: ReturnType<typeof createKvService>
+  let loopService: ReturnType<typeof createLoopService>
+  const projectId = 'test-project'
+
+  beforeEach(() => {
+    db = createTestDb()
+    kvService = createKvService(db)
+    loopService = createLoopService(kvService, projectId, createMockLogger())
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  test('inactive restart still works', () => {
+    const inactiveState = {
+      active: false,
+      sessionId: 'old-session',
+      worktreeName: 'test-worktree',
+      worktreeDir: '/tmp/test-worktree',
+      worktreeBranch: 'main',
+      iteration: 3,
+      maxIterations: 10,
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      terminationReason: 'cancelled',
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+
+    loopService.setState('test-worktree', inactiveState)
+    const retrieved = loopService.findByWorktreeName('test-worktree')
+    expect(retrieved).toEqual(inactiveState)
+    expect(retrieved?.active).toBe(false)
+    expect(retrieved?.terminationReason).toBe('cancelled')
+  })
+
+  test('completed loop blocks restart', () => {
+    const completedState = {
+      active: false,
+      sessionId: 'completed-session',
+      worktreeName: 'completed-worktree',
+      worktreeDir: '/tmp/test-worktree',
+      worktreeBranch: 'main',
+      iteration: 5,
+      maxIterations: 10,
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      terminationReason: 'completed',
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+
+    loopService.setState('completed-worktree', completedState)
+    const retrieved = loopService.findByWorktreeName('completed-worktree')
+    expect(retrieved).toEqual(completedState)
+    expect(retrieved?.active).toBe(false)
+    expect(retrieved?.terminationReason).toBe('completed')
+  })
+
+  test('active loop state can be retrieved for force-restart', () => {
+    const activeState = {
+      active: true,
+      sessionId: 'active-session',
+      worktreeName: 'active-worktree',
+      worktreeDir: '/tmp/test-worktree',
+      worktreeBranch: 'main',
+      iteration: 2,
+      maxIterations: 10,
+      completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+
+    loopService.setState('active-worktree', activeState)
+    loopService.registerSession('active-session', 'active-worktree')
+
+    const retrieved = loopService.getActiveState('active-worktree')
+    expect(retrieved).toEqual(activeState)
+    expect(retrieved?.active).toBe(true)
+
+    const resolved = loopService.resolveWorktreeName('active-session')
+    expect(resolved).toBe('active-worktree')
+  })
+
+  test('unregisterSession removes session mapping', () => {
+    const activeState = {
+      active: true,
+      sessionId: 'session-to-unregister',
+      worktreeName: 'unregister-worktree',
+      worktreeDir: '/tmp/test-worktree',
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 5,
+      completionPromise: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+
+    loopService.setState('unregister-worktree', activeState)
+    loopService.registerSession('session-to-unregister', 'unregister-worktree')
+
+    let resolved = loopService.resolveWorktreeName('session-to-unregister')
+    expect(resolved).toBe('unregister-worktree')
+
+    loopService.unregisterSession('session-to-unregister')
+
+    resolved = loopService.resolveWorktreeName('session-to-unregister')
+    expect(resolved).toBeNull()
+  })
+
+  test('deleteState removes loop state', () => {
+    const state = {
+      active: true,
+      sessionId: 'session-to-delete',
+      worktreeName: 'delete-worktree',
+      worktreeDir: '/tmp/test-worktree',
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 5,
+      completionPromise: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+
+    loopService.setState('delete-worktree', state)
+
+    let retrieved = loopService.getActiveState('delete-worktree')
+    expect(retrieved).toEqual(state)
+
+    loopService.deleteState('delete-worktree')
+
+    retrieved = loopService.getActiveState('delete-worktree')
+    expect(retrieved).toBeNull()
+  })
+})

@@ -87,6 +87,16 @@ const commands: Record<string, CommandModule> = {
       help()
     },
   },
+  restart: {
+    cli: async (args, globalOpts) => {
+      const { cli } = await import('./commands/restart')
+      await cli(args, globalOpts)
+    },
+    help: async () => {
+      const { help } = await import('./commands/restart')
+      help()
+    },
+  },
 }
 
 function printMainHelp(): void {
@@ -105,6 +115,7 @@ Commands:
   upgrade   Check for and install plugin updates
   status    Show loop status
   cancel    Cancel a loop
+  restart   Restart a loop
 
 Global Options:
   --db-path <path>       Path to memory database

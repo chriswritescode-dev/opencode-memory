@@ -344,10 +344,11 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
     }),
 
     'memory-loop-status': tool({
-      description: 'Check the status of memory loops. With no arguments, lists all active loops for the current project. Pass a worktree name for detailed status of a specific loop. Use restart to resume an inactive loop.',
+      description: 'Check the status of memory loops. With no arguments, lists all active loops for the current project. Pass a worktree name for detailed status of a specific loop. Use restart to resume an inactive loop. Use restart with force to force-restart a stuck active loop.',
       args: {
         name: z.string().optional().describe('Worktree name to check for detailed status'),
         restart: z.boolean().optional().describe('Restart an inactive loop by name'),
+        force: z.boolean().optional().describe('Force restart an active/stuck loop'),
       },
       execute: async (args) => {
         const active = loopService.listActive()
@@ -369,7 +370,11 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           }
 
           if (stoppedState.active) {
-            return `Loop "${stoppedState.worktreeName}" is already active. Nothing to restart.`
+            if (!args.force) {
+              return `Loop "${stoppedState.worktreeName}" is currently active. Use restart with force: true to force-restart a stuck loop.`
+            }
+            try { await v2.session.abort({ sessionID: stoppedState.sessionId }) } catch {}
+            loopService.unregisterSession(stoppedState.sessionId)
           }
 
           if (stoppedState.terminationReason === 'completed') {
