@@ -558,19 +558,6 @@ The `container/Dockerfile` is included in the project. To add project-specific t
 docker build -t ocm-sandbox:latest container/
 ```
 
-### Caveats
-
-- **Worktree required** -- sandbox only works with `worktree: true`. In-place loops (`worktree: false`) never use sandbox.
-- **Git blocked** -- git commands are explicitly blocked inside the container. All git operations are handled by the loop system on the host.
-- **No `tsc` global** -- TypeScript compiler is not globally available in the container. Use `pnpm tsc` or add it to your project dependencies.
-- **pnpm install caution** -- running `pnpm install` in the container writes `node_modules` to the host via the bind mount, potentially bloating worktree diffs.
-- **No network isolation** -- the container has full network access (no `--network=none` flag).
-- **No resource limits** -- no `--memory`, `--cpus`, or `--pids-limit` flags are applied.
-- **Orphan cleanup** -- orphaned containers from previous runs are automatically cleaned up on plugin startup.
-
-## Documentation
-
-Full documentation available at [chriswritescode-dev.github.io/opencode-memory/features/memory](https://chriswritescode-dev.github.io/opencode-memory/features/memory/)
 
 ## Development
 
