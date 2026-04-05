@@ -387,11 +387,31 @@ When enabled, logs are written to the specified file with timestamps. The log fi
 
 ## TUI Plugin
 
-The plugin includes a TUI sidebar widget that displays active and recent loop status directly in the OpenCode terminal interface. The sidebar shows:
+The plugin includes a TUI sidebar widget and dialog system for monitoring and managing loops directly in the OpenCode terminal interface.
 
-- Loop name with colored status indicator (green = active/completed, yellow = auditing, red = error, muted = cancelled)
-- Current phase and iteration count for active loops
-- Clickable entries to switch to the loop's session
+### Sidebar
+
+The sidebar shows all loops for the current project:
+
+- Loop name (truncated to 25 chars with middle ellipsis) with a colored status dot
+- Status text: current phase for active loops, termination reason for completed/cancelled
+- Clicking a **worktree loop** opens the Loop Details dialog
+- Clicking a **non-worktree loop** navigates directly to its session
+
+### Loop Details Dialog
+
+The Loop Details dialog shows a detailed view of a single loop:
+
+- Name and status badge (active / completed / error / cancelled / stalled)
+- Session stats: session ID, iteration count, token usage (input/output/cache), cost
+- Latest output from the last assistant message (scrollable, up to 500 chars)
+- **Back** — return to the loop list (when opened from the command palette)
+- **Cancel loop** — abort the active loop session (visible only when loop is active)
+- **Close (esc)** — dismiss the dialog
+
+### Command Palette
+
+The `Memory: Show loops` command is registered in the command palette when loops exist for the current project. It opens a list of all **worktree loops** (large dialog), then drills into the Loop Details dialog for the selected loop (medium dialog) with a Back button to return to the list.
 
 ### Setup
 
