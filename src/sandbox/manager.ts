@@ -139,7 +139,31 @@ export function createSandboxManager(
       activeSandboxes.set(worktreeName, active)
     } else {
       logger.log(`Sandbox container ${containerName} not running, starting new container`)
-      await start(worktreeName, projectDir)
+      const dockerAvailable = await docker.checkDocker()
+      if (!dockerAvailable) {
+        throw new Error('Docker is not available. Please ensure Docker is running.')
+      }
+
+      const imageExists = await docker.imageExists(config.image)
+      if (!imageExists) {
+        throw new Error(
+          `Docker image "${config.image}" not found. Build it first:\n` +
+          `  docker build -t ${config.image} container/`
+        )
+      }
+
+      const absoluteProjectDir = resolve(projectDir)
+      logger.log(`Creating sandbox container ${containerName} for ${absoluteProjectDir}`)
+      await docker.createContainer(containerName, absoluteProjectDir, config.image)
+
+      const active: ActiveSandbox = {
+        containerName,
+        projectDir: absoluteProjectDir,
+        startedAt,
+      }
+
+      activeSandboxes.set(worktreeName, active)
+      logger.log(`Sandbox container ${containerName} started`)
     }
   }
 

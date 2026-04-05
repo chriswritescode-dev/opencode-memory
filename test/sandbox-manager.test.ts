@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
-import { createSandboxManager } from '../manager'
-import type { DockerService } from '../docker'
-import type { Logger } from '../../types'
+import { createSandboxManager } from '../src/sandbox/manager'
+import type { DockerService } from '../src/sandbox/docker'
+import type { Logger } from '../src/types'
 
 function createMockLogger(): Logger {
   return {
@@ -163,6 +163,25 @@ describe('SandboxManager', () => {
       const active = manager.getActive('foo')
       expect(active).not.toBeNull()
       expect(active?.containerName).toBe('ocm-sandbox-foo')
+    })
+
+    test('preserves startedAt when starting new container', async () => {
+      const mockDocker = createMockDockerService()
+      const logger = createMockLogger()
+      const manager = createSandboxManager(
+        mockDocker as unknown as DockerService,
+        { image: 'ocm-sandbox:latest' },
+        logger
+      )
+
+      mockDocker.setRunning('ocm-sandbox-foo', false)
+      const originalStartedAt = '2025-01-01T00:00:00.000Z'
+
+      await manager.restore('foo', '/path/foo', originalStartedAt)
+
+      const active = manager.getActive('foo')
+      expect(active).not.toBeNull()
+      expect(active?.startedAt).toBe(originalStartedAt)
     })
   })
 })

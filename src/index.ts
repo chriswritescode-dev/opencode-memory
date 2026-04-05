@@ -101,20 +101,18 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
 
     if (sandboxManager) {
       const preserveWorktrees = activeSandboxLoops.map(s => s.worktreeName)
-      sandboxManager.cleanupOrphans(preserveWorktrees).then((count) => {
+      sandboxManager.cleanupOrphans(preserveWorktrees).then(async (count) => {
         if (count > 0) logger.log(`Cleaned up ${count} orphaned sandbox container(s)`)
-      }).catch((err) => logger.error('Failed to cleanup orphaned containers', err))
-
-      for (const loop of activeSandboxLoops) {
-        sandboxManager.restore(loop.worktreeName, loop.worktreeDir, loop.startedAt)
-          .then(() => {
+        for (const loop of activeSandboxLoops) {
+          try {
+            await sandboxManager!.restore(loop.worktreeName, loop.worktreeDir, loop.startedAt)
             loopService.setState(loop.worktreeName, { ...loop, active: true })
             logger.log(`Restored sandbox and reactivated loop for ${loop.worktreeName}`)
-          })
-          .catch(err =>
+          } catch (err) {
             logger.error(`Failed to restore sandbox for ${loop.worktreeName}`, err)
-          )
-      }
+          }
+        }
+      }).catch((err) => logger.error('Failed to cleanup orphaned containers', err))
     }
 
     const loopHandler = createLoopEventHandler(loopService, client, v2, logger, () => config, sandboxManager || undefined)
