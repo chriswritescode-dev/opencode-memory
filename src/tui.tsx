@@ -169,7 +169,15 @@ function truncate(text: string, maxLength: number): string {
   return text.slice(0, maxLength - 3) + '...'
 }
 
-function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
+function truncateMiddle(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  const keep = maxLength - 5
+  const start = Math.ceil(keep / 2)
+  const end = Math.floor(keep / 2)
+  return text.slice(0, start) + '.....' + text.slice(text.length - end)
+}
+
+function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: () => void }) {
   const theme = () => props.api.theme.current
   const loop = props.loop
   const [stats, setStats] = createSignal<SessionStats | null>(null)
@@ -192,38 +200,20 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
     }
   })
 
-  const options = () => {
-    const opts: Array<{ title: string; value: string; description?: string; onSelect?: () => void }> = []
-
-    if (loop.active) {
-      opts.push({
-        title: 'Cancel loop',
-        value: 'cancel',
-        description: `Cancel ${loop.name}`,
-        onSelect: () => {
-          props.api.ui.dialog.clear()
-          const directory = props.api.state.path.directory
-          const pid = resolveProjectId(directory)
-          if (!pid) return
-          const sessionId = cancelLoop(pid, loop.name)
-          if (sessionId) {
-            props.api.client.session.abort({ sessionID: sessionId }).catch(() => {})
-          }
-          props.api.ui.toast({
-            message: sessionId ? `Cancelled loop: ${loop.name}` : `Loop ${loop.name} is not active`,
-            variant: sessionId ? 'success' : 'info',
-            duration: 3000,
-          })
-        },
-      })
+  const handleCancel = () => {
+    props.api.ui.dialog.clear()
+    const directory = props.api.state.path.directory
+    const pid = resolveProjectId(directory)
+    if (!pid) return
+    const sessionId = cancelLoop(pid, loop.name)
+    if (sessionId) {
+      props.api.client.session.abort({ sessionID: sessionId }).catch(() => {})
     }
-
-    opts.push({
-      title: 'Close',
-      value: 'close',
+    props.api.ui.toast({
+      message: sessionId ? `Cancelled loop: ${loop.name}` : `Loop ${loop.name} is not active`,
+      variant: sessionId ? 'success' : 'info',
+      duration: 3000,
     })
-
-    return opts
   }
 
   const statusBadge = () => {
@@ -234,8 +224,8 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
   }
 
   return (
-    <box flexDirection="column" gap={1}>
-      <box flexDirection="column" gap={1} paddingBottom={1}>
+    <box flexDirection="column" paddingX={2}>
+      <box flexDirection="column" flexShrink={0}>
         <box flexDirection="row" gap={1} alignItems="center">
           <text fg={theme().text}>
             <b>{loop.name}</b>
@@ -243,10 +233,6 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
           <text fg={statusBadge().color}>
             <b>[{statusBadge().text}]</b>
           </text>
-          <Show when={loop.worktreeBranch}>
-            <text fg={theme().textMuted}>·</text>
-            <text fg={theme().textMuted}>{loop.worktreeBranch}</text>
-          </Show>
         </box>
         <box>
           <text fg={theme().textMuted}>
@@ -256,19 +242,19 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
       </box>
 
       <Show when={loading()}>
-        <box paddingBottom={1}>
+        <box paddingTop={1}>
           <text fg={theme().textMuted}>Loading stats...</text>
         </box>
       </Show>
 
       <Show when={!loading()}>
-        <box flexDirection="column" gap={1}>
+        <box flexDirection="column" paddingTop={1} flexShrink={0}>
           <Show when={stats()} fallback={
             <box>
               <text fg={theme().textMuted}>Session stats unavailable</text>
             </box>
           }>
-            <box flexDirection="column" gap={1}>
+            <box flexDirection="column">
               <box>
                 <text fg={theme().text}>
                   <span style={{ fg: theme().textMuted }}>Session: </span>
@@ -321,30 +307,26 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo }) {
       </Show>
 
       <Show when={stats()?.lastAssistantMessage?.text}>
-        <box flexDirection="column" gap={1} paddingTop={1}>
-          <box>
+        <box flexDirection="column" paddingTop={1} flexGrow={1} flexShrink={1}>
+          <box flexShrink={0}>
             <text fg={theme().text}><b>Latest Output</b></text>
           </box>
-          <box borderStyle="rounded" borderColor={theme().border} paddingX={1} paddingY={1}>
+          <scrollbox maxHeight={12} borderStyle="rounded" borderColor={theme().border} paddingX={1}>
             <text fg={theme().textMuted} wrapMode="word">
-              {truncate(stats()!.lastAssistantMessage!.text, 300)}
+              {truncate(stats()!.lastAssistantMessage!.text, 500)}
             </text>
-          </box>
+          </scrollbox>
         </box>
       </Show>
 
-      <box paddingTop={1}>
-        <props.api.ui.DialogSelect
-          title="Actions"
-          options={options()}
-          onSelect={(opt) => {
-            if (opt.onSelect) {
-              opt.onSelect()
-              return
-            }
-            props.api.ui.dialog.clear()
-          }}
-        />
+      <box paddingTop={1} flexShrink={0} flexDirection="row" gap={2} paddingY={2}>
+        <Show when={props.onBack}>
+          <text fg={theme().textMuted} onMouseUp={() => props.onBack!()}>Back</text>
+        </Show>
+        <Show when={loop.active}>
+          <text fg={theme().error} onMouseUp={handleCancel}>Cancel loop</text>
+        </Show>
+        <text fg={theme().textMuted} onMouseUp={() => props.api.ui.dialog.clear()}>Close (esc)</text>
       </box>
     </box>
   )
@@ -465,6 +447,7 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
                 gap={1}
                 onMouseUp={() => {
                   if (loop.worktree) {
+                    props.api.ui.dialog.setSize("medium")
                     props.api.ui.dialog.replace(() => (
                       <LoopDetailsDialog api={props.api} loop={loop} />
                     ))
@@ -475,7 +458,7 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
               >
                 <text flexShrink={0} style={{ fg: dot(loop) }}>•</text>
                 <text fg={theme().text} wrapMode="word">
-                  {loop.name}{' '}
+                  {truncateMiddle(loop.name, 25)}{' '}
                   <span style={{ fg: theme().textMuted }}>{statusText(loop)}</span>
                 </text>
               </box>
@@ -518,45 +501,42 @@ const tui: TuiPlugin = async (api) => {
         description: `${states.length} loop${states.length !== 1 ? 's' : ''}`,
         category: 'Memory',
         onSelect: () => {
-          const loopOptions = states.map(l => {
-            const active = l.active
-            const max = l.maxIterations > 0 ? `/${l.maxIterations}` : ''
-            const status = active
-              ? `${l.phase} · iter ${l.iteration}${max}`
-              : l.terminationReason === 'completed'
-                ? `completed · ${l.iteration} iter${l.iteration !== 1 ? 's' : ''}`
-                : l.terminationReason?.replace(/_/g, ' ') ?? 'ended'
+          const worktreeLoops = states.filter(l => l.worktree)
+          const loopsByName = new Map(worktreeLoops.map(l => [l.name, l]))
+          const loopOptions = worktreeLoops.map(l => {
+            const status = l.active
+              ? l.phase
+              : l.terminationReason?.replace(/_/g, ' ') ?? 'ended'
 
             return {
               title: l.name,
               value: l.name,
-              description: `${status}${l.worktreeBranch ? ` · ${l.worktreeBranch}` : ''}`,
-              onSelect: () => {
-                api.ui.dialog.clear()
-                if (l.worktree) {
-                  api.ui.dialog.replace(() => (
-                    <LoopDetailsDialog api={api} loop={l} />
-                  ))
-                } else {
-                  api.route.navigate('session', { sessionID: l.sessionId })
-                }
-              },
+              description: status,
             }
           })
 
-          api.ui.dialog.replace(() => (
-            <api.ui.DialogSelect
-              title="Loops"
-              options={loopOptions}
-              onSelect={(opt) => {
-                if (opt.onSelect) {
-                  opt.onSelect()
-                  return
-                }
-                api.ui.dialog.clear()
-              }}
-            />
-          ))
+          const showLoopList = () => {
+            api.ui.dialog.setSize("large")
+            api.ui.dialog.replace(() => (
+              <api.ui.DialogSelect
+                title="Loops"
+                options={loopOptions}
+                onSelect={(opt) => {
+                  const selected = loopsByName.get(opt.value as string)
+                  if (selected) {
+                    api.ui.dialog.setSize("medium")
+                    api.ui.dialog.replace(() => (
+                      <LoopDetailsDialog api={api} loop={selected} onBack={showLoopList} />
+                    ))
+                  } else {
+                    api.ui.dialog.clear()
+                  }
+                }}
+              />
+            ))
+          }
+
+          showLoopList()
         },
       },
     ]
