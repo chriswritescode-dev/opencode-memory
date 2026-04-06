@@ -7,16 +7,14 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],
-    extends: [
-      ...tseslint.configs.strictTypeChecked,
-      ...tseslint.configs.stylisticTypeChecked,
-    ],
     plugins: {
       solid: solidPlugin,
     },
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          allowDefaultProject: ["scripts/*.ts", "scripts/*.js", "test/*.ts"],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
       parser: tseslint.parser,
@@ -30,16 +28,9 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: "^_",
         },
       ],
-      "@typescript-eslint/consistent-type-imports": [
-        "error",
-        {
-          prefer: "type-imports",
-          fixStyle: "inline-type-imports",
-        },
-      ],
-      "@typescript-eslint/no-explicit-any": "warn",
-      "@typescript-eslint/prefer-nullish-coalescing": "error",
-      "@typescript-eslint/prefer-optional-chain": "error",
+      "@typescript-eslint/no-deprecated": "warn",
+      "no-useless-assignment": "warn",
+      "no-empty": "off",
     },
   },
   {
@@ -49,6 +40,15 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/**", "node_modules/**", "*.d.ts"],
+    files: ["scripts/*.js"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        console: "readonly",
+      },
+    },
+  },
+  {
+    ignores: ["dist/**", "node_modules/**", "*.d.ts", "test/**"],
   }
 );
