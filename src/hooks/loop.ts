@@ -4,6 +4,7 @@ import type { LoopService, LoopState } from '../services/loop'
 import { MAX_RETRIES, MAX_CONSECUTIVE_STALLS, LOOP_PERMISSION_RULESET } from '../services/loop'
 import type { Logger, PluginConfig, LoopConfig } from '../types'
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
+import { resolveLoopModel } from '../utils/loop-helpers'
 import { execSync, spawnSync } from 'child_process'
 import { resolve } from 'path'
 import type { createSandboxManager } from '../sandbox/manager'
@@ -390,7 +391,7 @@ export function createLoopEventHandler(
     }
 
     let assistantErrorDetected = false
-    if (currentState.completionPromise) {
+    if (currentState.completionSignal) {
       const { text: textContent, error: assistantError } = await getLastAssistantInfo(currentState.sessionId, currentState.worktreeDir)
       if (assistantError) {
         assistantErrorDetected = true
@@ -407,14 +408,14 @@ export function createLoopEventHandler(
           currentState = loopService.getActiveState(worktreeName)!
         }
       }
-      if (textContent && currentState.completionPromise && loopService.checkCompletionPromise(textContent, currentState.completionPromise)) {
+      if (textContent && currentState.completionSignal && loopService.checkCompletionSignal(textContent, currentState.completionSignal)) {
         const currentAuditCount = currentState.auditCount ?? 0
         if (!currentState.audit || currentAuditCount >= minAudits) {
           if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
             logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
           } else {
             await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected ${currentState.completionPromise} at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
+            logger.log(`Loop completed: detected ${currentState.completionSignal} at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
             return
           }
         } else {
@@ -490,12 +491,8 @@ export function createLoopEventHandler(
     logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
 
     const currentConfig = getConfig()
-    const freshStateForModel = loopService.getActiveState(worktreeName)
-    const loopModel = freshStateForModel?.modelFailed
-      ? undefined
-      : (parseModelString(currentConfig.loop?.model) ?? parseModelString(currentConfig.executionModel))
-
-    if (freshStateForModel?.modelFailed) {
+    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
+    if (!loopModel) {
       logger.log(`Loop: configured model previously failed, using default model`)
     }
 
@@ -600,14 +597,14 @@ export function createLoopEventHandler(
     // Always pass the full audit response to the code agent
     const auditFindings = auditText ?? undefined
 
-    if (currentState.completionPromise && auditText) {
-      if (loopService.checkCompletionPromise(auditText, currentState.completionPromise)) {
+    if (currentState.completionSignal && auditText) {
+      if (loopService.checkCompletionSignal(auditText, currentState.completionSignal)) {
         if (!currentState.audit || newAuditCount >= minAudits) {
           if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
             logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
           } else {
             await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected ${currentState.completionPromise} in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
+            logger.log(`Loop completed: detected ${currentState.completionSignal} in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
             return
           }
         } else {
@@ -646,12 +643,8 @@ export function createLoopEventHandler(
     logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
 
     const currentConfig = getConfig()
-    const freshStateForModel = loopService.getActiveState(worktreeName)
-    const loopModel = freshStateForModel?.modelFailed
-      ? undefined
-      : (parseModelString(currentConfig.loop?.model) ?? parseModelString(currentConfig.executionModel))
-
-    if (freshStateForModel?.modelFailed) {
+    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
+    if (!loopModel) {
       logger.log(`Loop: configured model previously failed, using default model`)
     }
 

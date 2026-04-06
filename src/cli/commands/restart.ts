@@ -1,4 +1,5 @@
 import type { LoopState } from '../../services/loop'
+import { buildCompletionSignalInstructions, LOOP_PERMISSION_RULESET } from '../../services/loop'
 import { openDatabase, confirm } from '../utils'
 import { findPartialMatch } from '../../utils/partial-match'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
@@ -194,6 +195,7 @@ export async function run(argv: RestartArgs): Promise<void> {
     const createResult = await client.session.create({
       title: state.worktreeName,
       directory,
+      permission: LOOP_PERMISSION_RULESET,
     })
 
     if (createResult.error || !createResult.data) {
@@ -231,8 +233,8 @@ export async function run(argv: RestartArgs): Promise<void> {
     )
 
     let promptText = state.prompt ?? ''
-    if (state.completionPromise) {
-      promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${state.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
+    if (state.completionSignal) {
+      promptText += buildCompletionSignalInstructions(state.completionSignal)
     }
 
     try {

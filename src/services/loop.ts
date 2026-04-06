@@ -36,6 +36,11 @@ export const STALL_TIMEOUT_MS = 60_000
 export const MAX_CONSECUTIVE_STALLS = 5
 export const DEFAULT_MIN_AUDITS = 1
 export const RECENT_MESSAGES_COUNT = 5
+export const DEFAULT_COMPLETION_SIGNAL = 'ALL_PHASES_COMPLETE'
+
+export function buildCompletionSignalInstructions(signal: string): string {
+  return `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${signal}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
+}
 
 export const LOOP_PERMISSION_RULESET = [
   { permission: '*', pattern: '*', action: 'allow' as const },
@@ -51,7 +56,7 @@ export interface LoopState {
   worktreeBranch?: string
   iteration: number
   maxIterations: number
-  completionPromise: string | null
+  completionSignal: string | null
   startedAt: string
   prompt?: string
   phase: 'coding' | 'auditing'
@@ -75,7 +80,7 @@ export interface LoopService {
   registerSession(sessionId: string, worktreeName: string): void
   resolveWorktreeName(sessionId: string): string | null
   unregisterSession(sessionId: string): void
-  checkCompletionPromise(text: string, promise: string): boolean
+  checkCompletionSignal(text: string, promise: string): boolean
   buildContinuationPrompt(state: LoopState, auditFindings?: string): string
   buildAuditPrompt(state: LoopState): string
   listActive(): LoopState[]
@@ -130,8 +135,15 @@ export function createLoopService(
     kvService.delete(projectId, `loop-session:${sessionId}`)
   }
 
-  function checkCompletionPromise(text: string, promise: string): boolean {
-    return text.includes(promise)
+  function checkCompletionSignal(text: string, promise: string): boolean {
+    // If promise already contains <promise> tags, use exact match; otherwise wrap with tags
+    const pattern = promise.includes('<promise>') ? escapeRegex(promise) : `<promise>${escapeRegex(promise)}</promise>`
+    const regex = new RegExp(pattern, 'i')
+    return regex.test(text)
+  }
+
+  function escapeRegex(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
 
   function redactCompletionSignal(text: string, promise: string): string {
@@ -141,8 +153,8 @@ export function createLoopService(
   function buildContinuationPrompt(state: LoopState, auditFindings?: string): string {
     let systemLine = `Loop iteration ${state.iteration ?? 0}`
 
-    if (state.completionPromise) {
-      systemLine += ` | To stop: output ${state.completionPromise} (ONLY after all verification commands pass AND all phase acceptance criteria are met)`
+    if (state.completionSignal) {
+      systemLine += ` | To stop: output ${state.completionSignal} (ONLY after all verification commands pass AND all phase acceptance criteria are met)`
     } else if ((state.maxIterations ?? 0) > 0) {
       systemLine += ` / ${state.maxIterations}`
     } else {
@@ -152,10 +164,10 @@ export function createLoopService(
     let prompt = `[${systemLine}]\n\n${state.prompt ?? ''}`
 
     if (auditFindings) {
-      const cleanedFindings = state.completionPromise
-        ? redactCompletionSignal(auditFindings, state.completionPromise)
+      const cleanedFindings = state.completionSignal
+        ? redactCompletionSignal(auditFindings, state.completionSignal)
         : auditFindings
-      const completionInstruction = state.completionPromise
+      const completionInstruction = state.completionSignal
         ? '\n\nAfter fixing all issues, output the completion signal.'
         : ''
       prompt += `\n\n---\nThe code auditor reviewed your changes. You MUST address all bugs and convention violations below — do not dismiss findings as unrelated to the task. Fix them directly without creating a plan or asking for approval.\n\n${cleanedFindings}${completionInstruction}`
@@ -280,7 +292,7 @@ export function createLoopService(
     registerSession,
     resolveWorktreeName,
     unregisterSession,
-    checkCompletionPromise,
+    checkCompletionSignal,
     buildContinuationPrompt,
     buildAuditPrompt,
     listActive,

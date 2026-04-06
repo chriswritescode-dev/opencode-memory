@@ -223,8 +223,8 @@ export async function run(argv: StatusArgs): Promise<void> {
         console.log(`  Started:         ${new Date(startedAt).toISOString()}`)
         const sessionStatus = await tryFetchSessionStatus(argv.server ?? 'http://localhost:5551', state.sessionId, state.worktreeDir!)
         console.log(`  Status:          ${sessionStatus}`)
-        if (state.completionPromise) {
-          console.log(`  Completion:      ${state.completionPromise}`)
+        if (state.completionSignal) {
+          console.log(`  Completion:      ${state.completionSignal}`)
         }
         if (state.lastAuditResult) {
           for (const line of formatAuditResult(state.lastAuditResult)) {

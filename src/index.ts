@@ -22,6 +22,7 @@ import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, a
 import { createSandboxToolBeforeHook, createSandboxToolAfterHook } from './hooks/sandbox-tools'
 import type { DimensionMismatchState, InitState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
+import { isSandboxEnabled } from './sandbox/context'
 
 
 export function createMemoryPlugin(config: PluginConfig): Plugin {
@@ -87,11 +88,11 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     }
 
     let sandboxManager: ReturnType<typeof createSandboxManager> | null = null
-    if (config.sandbox?.mode === 'docker') {
+    if (isSandboxEnabled(config, null)) {
       const dockerService = createDockerService(logger)
       try {
         sandboxManager = createSandboxManager(dockerService, {
-          image: config.sandbox.image || 'ocm-sandbox:latest',
+          image: config.sandbox?.image || 'ocm-sandbox:latest',
         }, logger)
         logger.log('Docker sandbox manager initialized')
       } catch (err) {
@@ -199,15 +200,6 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
             } catch (err) {
               logger.error(`Cleanup: failed to stop sandbox for ${state.worktreeName}`, err)
             }
-          }
-        }
-        const sandboxAny = sandboxManager as any
-        if (sandboxAny.isGlobalActive?.()) {
-          try {
-            await sandboxAny.stopGlobal?.()
-            logger.log('Cleanup: stopped global sandbox container')
-          } catch (err) {
-            logger.error('Cleanup: failed to stop global sandbox container', err)
           }
         }
       }

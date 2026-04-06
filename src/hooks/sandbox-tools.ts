@@ -3,6 +3,7 @@ import type { Logger } from '../types'
 import type { createLoopService } from '../services/loop'
 import type { createSandboxManager } from '../sandbox/manager'
 import { toContainerPath, rewriteOutput } from '../sandbox/path'
+import { getSandboxForSession } from '../sandbox/context'
 
 interface SandboxToolHookDeps {
   loopService: ReturnType<typeof createLoopService>
@@ -10,28 +11,10 @@ interface SandboxToolHookDeps {
   logger: Logger
 }
 
-const pendingResults = new Map<string, string>()
-
-function getSandboxContext(deps: SandboxToolHookDeps, sessionId: string) {
-  if (!deps.sandboxManager) return null
-
-  const worktreeName = deps.loopService.resolveWorktreeName(sessionId)
-  if (!worktreeName) return null
-
-  const state = deps.loopService.getActiveState(worktreeName)
-  if (!state?.active || !state.sandbox) return null
-
-  const active = deps.sandboxManager.getActive(worktreeName)
-  if (!active) return null
-
-  return {
-    docker: deps.sandboxManager.docker,
-    containerName: active.containerName,
-    hostDir: active.projectDir,
-  }
-}
+const pendingResults = new Map<string, { result: string; storedAt: number }>()
 
 const BASH_DEFAULT_TIMEOUT_MS = 120_000
+const STALE_THRESHOLD_MS = 5 * 60 * 1000
 
 export function createSandboxToolBeforeHook(deps: SandboxToolHookDeps): Hooks['tool.execute.before'] {
   return async (
@@ -40,7 +23,7 @@ export function createSandboxToolBeforeHook(deps: SandboxToolHookDeps): Hooks['t
   ) => {
     if (input.tool !== 'bash') return
 
-    const sandbox = getSandboxContext(deps, input.sessionID)
+    const sandbox = getSandboxForSession(deps, input.sessionID)
     if (!sandbox) return
 
     const { docker, containerName, hostDir } = sandbox
@@ -50,7 +33,7 @@ export function createSandboxToolBeforeHook(deps: SandboxToolHookDeps): Hooks['t
 
     const cmd = (args.command ?? '').trimStart()
     if (cmd === 'git push' || cmd.startsWith('git push ')) {
-      pendingResults.set(input.callID, 'Git push is not available in sandbox mode. Pushes must be run on the host.')
+      pendingResults.set(input.callID, { result: 'Git push is not available in sandbox mode. Pushes must be run on the host.', storedAt: Date.now() })
       return
     }
 
@@ -82,11 +65,11 @@ export function createSandboxToolBeforeHook(deps: SandboxToolHookDeps): Hooks['t
         dockerOutput += `\n\n[Exit code: ${result.exitCode}]`
       }
 
-      pendingResults.set(input.callID, dockerOutput.trim())
+      pendingResults.set(input.callID, { result: dockerOutput.trim(), storedAt: Date.now() })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       deps.logger.log(`[sandbox-hook] exec failed for callID ${input.callID}: ${message}`)
-      pendingResults.set(input.callID, `Command failed: ${message}`)
+      pendingResults.set(input.callID, { result: `Command failed: ${message}`, storedAt: Date.now() })
     }
   }
 }
@@ -98,11 +81,18 @@ export function createSandboxToolAfterHook(deps: SandboxToolHookDeps): Hooks['to
   ) => {
     if (input.tool !== 'bash') return
 
-    const dockerResult = pendingResults.get(input.callID)
-    if (dockerResult === undefined) return
+    const now = Date.now()
+    for (const [key, entry] of pendingResults) {
+      if (now - entry.storedAt > STALE_THRESHOLD_MS) {
+        pendingResults.delete(key)
+      }
+    }
+
+    const entry = pendingResults.get(input.callID)
+    if (entry === undefined) return
 
     pendingResults.delete(input.callID)
     deps.logger.log(`[sandbox-hook] replacing bash output for callID ${input.callID}`)
-    output.output = dockerResult
+    output.output = entry.result
   }
 }
