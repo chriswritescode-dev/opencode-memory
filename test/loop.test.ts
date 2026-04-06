@@ -56,7 +56,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 1,
       maxIterations: 5,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -163,7 +163,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 1,
       maxIterations: 0,
-      completionSignal: '<promise>COMPLETE_TASK</promise>',
+      completionSignal: 'COMPLETE_TASK',
       startedAt: new Date().toISOString(),
       prompt: 'My test prompt',
       phase: 'coding' as const,
@@ -173,7 +173,7 @@ describe('LoopService', () => {
     }
 
     const prompt = loopService.buildContinuationPrompt(state)
-    expect(prompt).toContain('[Loop iteration 1 | To stop: output <promise>COMPLETE_TASK</promise> (ONLY after all verification commands pass AND all phase acceptance criteria are met)]')
+    expect(prompt).toContain('[Loop iteration 1 | To stop: output COMPLETE_TASK (ONLY after all verification commands pass AND all phase acceptance criteria are met)]')
   })
 
   test('buildContinuationPrompt includes max iterations when no promise', () => {
@@ -229,7 +229,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 5,
       maxIterations: 10,
-      completionSignal: '<promise>PERSIST_TEST</promise>',
+      completionSignal: 'PERSIST_TEST',
       startedAt: new Date().toISOString(),
       prompt: 'Persistence test',
       phase: 'coding' as const,
@@ -332,7 +332,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 2,
       maxIterations: 0,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -446,7 +446,7 @@ describe('LoopService', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 1,
       maxIterations: 5,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -493,7 +493,7 @@ describe('LoopService', () => {
       worktreeBranch: 'main',
       iteration: 1,
       maxIterations: 5,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'In-place test prompt',
       phase: 'coding' as const,
@@ -541,7 +541,7 @@ describe('LoopService', () => {
       worktreeBranch: 'main',
       iteration: 3,
       maxIterations: 0,
-      completionSignal: '<promise>COMPLETE</promise>',
+      completionSignal: 'COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'In-place prompt test',
       phase: 'coding' as const,
@@ -553,7 +553,7 @@ describe('LoopService', () => {
     const prompt = loopService.buildContinuationPrompt(inPlaceState)
     expect(prompt).toContain('Loop iteration 3')
     expect(prompt).toContain('In-place prompt test')
-    expect(prompt).toContain('<promise>COMPLETE</promise>')
+    expect(prompt).toContain('COMPLETE')
   })
 
   test('buildContinuationPrompt with audit findings works with inPlace state', () => {
@@ -933,7 +933,7 @@ describe('reconcileStale', () => {
       worktreeBranch: 'main',
       iteration: 3,
       maxIterations: 10,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1061,7 +1061,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 3,
       maxIterations: 0,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1089,7 +1089,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 2,
       maxIterations: 0,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1111,7 +1111,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 3,
       maxIterations: 0,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1138,7 +1138,7 @@ describe('buildContinuationPrompt with outstanding findings', () => {
       worktreeBranch: 'opencode/loop-test',
       iteration: 2,
       maxIterations: 0,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1453,7 +1453,7 @@ describe('Assistant Error Detection', () => {
       worktreeBranch: 'main',
       iteration: 1,
       maxIterations: 5,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1873,7 +1873,7 @@ describe('Assistant Error Detection', () => {
       worktreeBranch: 'main',
       iteration: 1,
       maxIterations: 5,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,
@@ -1946,7 +1946,7 @@ describe('Force-restart behavior', () => {
       worktreeBranch: 'main',
       iteration: 3,
       maxIterations: 10,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
       terminationReason: 'cancelled',
@@ -1973,7 +1973,7 @@ describe('Force-restart behavior', () => {
       worktreeBranch: 'main',
       iteration: 5,
       maxIterations: 10,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
       terminationReason: 'completed',
@@ -2000,7 +2000,7 @@ describe('Force-restart behavior', () => {
       worktreeBranch: 'main',
       iteration: 2,
       maxIterations: 10,
-      completionSignal: '<promise>ALL_PHASES_COMPLETE</promise>',
+      completionSignal: 'ALL_PHASES_COMPLETE',
       startedAt: new Date().toISOString(),
       prompt: 'Test prompt',
       phase: 'coding' as const,

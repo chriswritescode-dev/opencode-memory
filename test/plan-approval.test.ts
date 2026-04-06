@@ -82,32 +82,32 @@ Do NOT output text without also making this tool call.
     db.close()
   })
 
-  function simulateToolExecuteAfter(
-    tool: string,
-    args: unknown,
-    output: { title: string; output: string; metadata: unknown },
-    sessionActive = false
-  ) {
-    if (sessionActive) {
-      const state = {
-        active: true,
-        sessionId: sessionID,
-        worktreeName: 'test-worktree',
-        worktreeDir: '/test/worktree',
-        worktreeBranch: 'opencode/loop-test',
-        iteration: 1,
-        maxIterations: 5,
-        completionPromise: '<promise>ALL_PHASES_COMPLETE</promise>',
-        startedAt: new Date().toISOString(),
-        prompt: 'Test prompt',
-        phase: 'coding' as const,
-        audit: false,
-        errorCount: 0,
-        auditCount: 0,
-        worktree: true,
+    function simulateToolExecuteAfter(
+      tool: string,
+      args: unknown,
+      output: { title: string; output: string; metadata: unknown },
+      sessionActive = false
+    ) {
+      if (sessionActive) {
+        const state = {
+          active: true,
+          sessionId: sessionID,
+          worktreeName: 'test-worktree',
+          worktreeDir: '/test/worktree',
+          worktreeBranch: 'opencode/loop-test',
+          iteration: 1,
+          maxIterations: 5,
+          completionSignal: 'ALL_PHASES_COMPLETE',
+          startedAt: new Date().toISOString(),
+          prompt: 'Test prompt',
+          phase: 'coding' as const,
+          audit: false,
+          errorCount: 0,
+          auditCount: 0,
+          worktree: true,
+        }
+        loopService.setState(sessionID, state)
       }
-      loopService.setState(sessionID, state)
-    }
 
     if (tool === 'question') {
       const questionArgs = args as { questions?: Array<{ options?: Array<{ label: string }> }> } | undefined
