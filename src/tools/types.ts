@@ -13,6 +13,7 @@ import type { PluginInput } from '@opencode-ai/plugin'
 import type { createSandboxManager } from '../sandbox/manager'
 
 const z = tool.schema
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- z.enum() type doesn't match tool.schema interface
 export const scopeEnum = z.enum(['convention', 'decision', 'context']) as any
 
 export interface DimensionMismatchState {

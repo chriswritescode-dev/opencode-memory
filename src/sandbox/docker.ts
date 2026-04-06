@@ -1,4 +1,4 @@
-import { spawn } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import type { Logger } from '../types'
 
 export interface DockerExecOpts {
@@ -173,7 +173,7 @@ export function createDockerService(logger: Logger): DockerService {
 
     const inner = new Promise<DockerExecResult>((resolve) => {
       const stdioConfig: 'pipe' | 'ignore' = options?.stdin ? 'pipe' : 'ignore'
-      const child: any = spawn(command, args, {
+      const child: ChildProcess = spawn(command, args, {
         stdio: [stdioConfig, 'pipe', 'pipe'],
       })
 
@@ -217,17 +217,17 @@ export function createDockerService(logger: Logger): DockerService {
         }
       }
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout!.on('data', (data: Buffer) => {
         stdout += data.toString()
       })
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr!.on('data', (data: Buffer) => {
         stderr += data.toString()
       })
 
       if (options?.stdin) {
-        child.stdin.write(options.stdin)
-        child.stdin.end()
+        child.stdin!.write(options.stdin)
+        child.stdin!.end()
       }
 
       child.on('close', (code: number | null) => {

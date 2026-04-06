@@ -49,7 +49,7 @@ async function setupLoop(
     let currentBranch: string | undefined
     try {
       currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, encoding: 'utf-8' }).trim()
-    } catch (err) {
+    } catch (_err) {
       logger.log(`loop: no git branch detected, running without branch info`)
     }
 
@@ -497,7 +497,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
             return lines.join('\n')
           }
 
-          let statuses: Record<string, { type: string; attempt?: number; message?: string; next?: number }> = {}
+          const statuses: Record<string, { type: string; attempt?: number; message?: string; next?: number }> = {}
           try {
             const uniqueDirs = [...new Set(active.map((s) => s.worktreeDir).filter(Boolean))]
             const results = await Promise.allSettled(

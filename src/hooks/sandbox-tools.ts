@@ -19,6 +19,7 @@ const STALE_THRESHOLD_MS = 5 * 60 * 1000
 export function createSandboxToolBeforeHook(deps: SandboxToolHookDeps): Hooks['tool.execute.before'] {
   return async (
     input: { tool: string; sessionID: string; callID: string },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches upstream Hooks type
     output: { args: any },
   ) => {
     if (input.tool !== 'bash') return
@@ -76,7 +77,9 @@ export function createSandboxToolBeforeHook(deps: SandboxToolHookDeps): Hooks['t
 
 export function createSandboxToolAfterHook(deps: SandboxToolHookDeps): Hooks['tool.execute.after'] {
   return async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches upstream Hooks type
     input: { tool: string; sessionID: string; callID: string; args: any },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches upstream Hooks type
     output: { title: string; output: string; metadata: any },
   ) => {
     if (input.tool !== 'bash') return

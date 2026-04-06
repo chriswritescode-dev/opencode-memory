@@ -106,7 +106,6 @@ export function createSandboxFsTools(ctx: ToolContext): Record<string, ReturnTyp
             grouped.get(filePath)!.push({ line: lineNum, text: truncatedText })
           }
 
-          let totalMatches = 0
           const outputParts: string[] = []
           outputParts.push(`Found ${lines.length} matches`)
 
@@ -114,7 +113,6 @@ export function createSandboxFsTools(ctx: ToolContext): Record<string, ReturnTyp
             outputParts.push(`${filePath}:`)
             for (const m of matches) {
               outputParts.push(`  Line ${m.line}: ${m.text}`)
-              totalMatches++
             }
             outputParts.push('')
           }
