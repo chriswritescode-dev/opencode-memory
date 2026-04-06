@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createKvQuery } from '../src/storage/kv-queries'
 import { createKvService } from '../src/services/kv'
-import { createLoopService } from '../src/services/loop'
+import { createLoopService, migrateRalphKeys, buildCompletionSignalInstructions, fetchSessionOutput, type LoopState } from '../src/services/loop'
 
 const TEST_DIR = '/tmp/opencode-manager-loop-test-' + Date.now()
 
@@ -2077,5 +2077,423 @@ describe('Force-restart behavior', () => {
 
     retrieved = loopService.getActiveState('delete-worktree')
     expect(retrieved).toBeNull()
+  })
+})
+
+describe('migrateRalphKeys', () => {
+  let db: Database
+  let kvService: ReturnType<typeof createKvService>
+  const projectId = 'test-project'
+
+  beforeEach(() => {
+    db = createTestDb()
+    kvService = createKvService(db)
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  test('migrates ralph: entries to loop: prefix', () => {
+    const logger = createMockLogger()
+    kvService.set(projectId, 'ralph:foo', { value: 'bar' })
+    kvService.set(projectId, 'ralph:bar', { value: 'baz' })
+
+    migrateRalphKeys(kvService, projectId, logger)
+
+    expect(kvService.get(projectId, 'loop:foo')).toEqual({ value: 'bar' })
+    expect(kvService.get(projectId, 'loop:bar')).toEqual({ value: 'baz' })
+    expect(kvService.get(projectId, 'ralph:foo')).toBeNull()
+    expect(kvService.get(projectId, 'ralph:bar')).toBeNull()
+  })
+
+  test('converts inPlace true to worktree false', () => {
+    const logger = createMockLogger()
+    kvService.set(projectId, 'ralph:test', { inPlace: true, sessionId: 'abc' })
+
+    migrateRalphKeys(kvService, projectId, logger)
+
+    const migrated = kvService.get(projectId, 'loop:test')
+    expect(migrated).toEqual({ worktree: false, sessionId: 'abc' })
+    expect((migrated as any)?.inPlace).toBeUndefined()
+  })
+
+  test('converts inPlace false to worktree true', () => {
+    const logger = createMockLogger()
+    kvService.set(projectId, 'ralph:test', { inPlace: false, sessionId: 'abc' })
+
+    migrateRalphKeys(kvService, projectId, logger)
+
+    const migrated = kvService.get(projectId, 'loop:test')
+    expect(migrated).toEqual({ worktree: true, sessionId: 'abc' })
+    expect((migrated as any)?.inPlace).toBeUndefined()
+  })
+
+  test('migrates ralph-session: entries to loop-session: prefix', () => {
+    const logger = createMockLogger()
+    kvService.set(projectId, 'ralph:dummy', { dummy: true })
+    kvService.set(projectId, 'ralph-session:s1', 'worktree-1')
+
+    migrateRalphKeys(kvService, projectId, logger)
+
+    expect(kvService.get(projectId, 'loop-session:s1')).toBe('worktree-1')
+    expect(kvService.get(projectId, 'ralph-session:s1')).toBeNull()
+  })
+
+  test('no-op when no ralph entries exist', () => {
+    const logger = createMockLogger()
+
+    expect(() => migrateRalphKeys(kvService, projectId, logger)).not.toThrow()
+    expect(kvService.listByPrefix(projectId, 'loop:').length).toBe(0)
+  })
+
+  test('logs migration count', () => {
+    const logs: string[] = []
+    const logger = {
+      log: (msg: string) => logs.push(msg),
+      error: () => {},
+      debug: () => {},
+    }
+    kvService.set(projectId, 'ralph:foo', { value: 'bar' })
+    kvService.set(projectId, 'ralph:bar', { value: 'baz' })
+
+    migrateRalphKeys(kvService, projectId, logger)
+
+    expect(logs.some(log => log.includes('Migrating') && log.includes('2'))).toBe(true)
+  })
+})
+
+describe('buildCompletionSignalInstructions', () => {
+  test('returns string containing the signal', () => {
+    const result = buildCompletionSignalInstructions('MY_SIGNAL')
+    expect(result).toContain('MY_SIGNAL')
+  })
+
+  test('contains verification instructions', () => {
+    const result = buildCompletionSignalInstructions('MY_SIGNAL')
+    expect(result).toContain('Verify each phase')
+  })
+
+  test('contains IMPORTANT header', () => {
+    const result = buildCompletionSignalInstructions('MY_SIGNAL')
+    expect(result).toContain('IMPORTANT')
+  })
+})
+
+describe('terminateAll', () => {
+  let db: Database
+  let kvService: ReturnType<typeof createKvService>
+  let loopService: ReturnType<typeof createLoopService>
+  const projectId = 'test-project'
+
+  beforeEach(() => {
+    db = createTestDb()
+    kvService = createKvService(db)
+    loopService = createLoopService(kvService, projectId, createMockLogger())
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  function createActiveState(name: string, sessionId: string): LoopState {
+    return {
+      active: true,
+      sessionId,
+      worktreeName: name,
+      worktreeDir: `/tmp/${name}`,
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 5,
+      completionSignal: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+  }
+
+  test('marks all active loops as shutdown', () => {
+    const state1 = createActiveState('worktree-1', 'session-1')
+    const state2 = createActiveState('worktree-2', 'session-2')
+
+    loopService.setState('worktree-1', state1)
+    loopService.setState('worktree-2', state2)
+
+    loopService.terminateAll()
+
+    const updated1 = loopService.getAnyState('worktree-1')
+    const updated2 = loopService.getAnyState('worktree-2')
+
+    expect(updated1?.active).toBe(false)
+    expect(updated1?.terminationReason).toBe('shutdown')
+    expect(updated1?.completedAt).toBeDefined()
+
+    expect(updated2?.active).toBe(false)
+    expect(updated2?.terminationReason).toBe('shutdown')
+    expect(updated2?.completedAt).toBeDefined()
+  })
+
+  test('does not affect inactive loops', () => {
+    const activeState = createActiveState('active', 'session-active')
+    const inactiveState: LoopState = {
+      ...createActiveState('inactive', 'session-inactive'),
+      active: false,
+      terminationReason: 'completed',
+    }
+
+    loopService.setState('active', activeState)
+    loopService.setState('inactive', inactiveState)
+
+    loopService.terminateAll()
+
+    const inactive = loopService.getAnyState('inactive')
+    expect(inactive?.terminationReason).toBe('completed')
+  })
+
+  test('no-op with no active loops', () => {
+    expect(() => loopService.terminateAll()).not.toThrow()
+  })
+})
+
+describe('listRecent', () => {
+  let db: Database
+  let kvService: ReturnType<typeof createKvService>
+  let loopService: ReturnType<typeof createLoopService>
+  const projectId = 'test-project'
+
+  beforeEach(() => {
+    db = createTestDb()
+    kvService = createKvService(db)
+    loopService = createLoopService(kvService, projectId, createMockLogger())
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  function createActiveState(name: string, sessionId: string): LoopState {
+    return {
+      active: true,
+      sessionId,
+      worktreeName: name,
+      worktreeDir: `/tmp/${name}`,
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 5,
+      completionSignal: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+  }
+
+  function createInactiveState(name: string, sessionId: string): LoopState {
+    return {
+      active: false,
+      sessionId,
+      worktreeName: name,
+      worktreeDir: `/tmp/${name}`,
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 5,
+      completionSignal: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+  }
+
+  test('returns only inactive states', () => {
+    loopService.setState('active-1', createActiveState('active-1', 'session-1'))
+    loopService.setState('active-2', createActiveState('active-2', 'session-2'))
+    loopService.setState('inactive-1', createInactiveState('inactive-1', 'session-3'))
+
+    const recent = loopService.listRecent()
+
+    expect(recent.length).toBe(1)
+    expect(recent[0].worktreeName).toBe('inactive-1')
+  })
+
+  test('returns empty array when no inactive states', () => {
+    loopService.setState('active-1', createActiveState('active-1', 'session-1'))
+    loopService.setState('active-2', createActiveState('active-2', 'session-2'))
+
+    const recent = loopService.listRecent()
+
+    expect(recent).toEqual([])
+  })
+})
+
+describe('findCandidatesByPartialName', () => {
+  let db: Database
+  let kvService: ReturnType<typeof createKvService>
+  let loopService: ReturnType<typeof createLoopService>
+  const projectId = 'test-project'
+
+  beforeEach(() => {
+    db = createTestDb()
+    kvService = createKvService(db)
+    loopService = createLoopService(kvService, projectId, createMockLogger())
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  function createActiveState(name: string, sessionId: string): LoopState {
+    return {
+      active: true,
+      sessionId,
+      worktreeName: name,
+      worktreeDir: `/tmp/${name}`,
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 5,
+      completionSignal: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'Test prompt',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+  }
+
+  test('returns multiple candidates for ambiguous match', () => {
+    loopService.setState('feature-auth', createActiveState('feature-auth', 'session-1'))
+    loopService.setState('feature-api', createActiveState('feature-api', 'session-2'))
+
+    const candidates = loopService.findCandidatesByPartialName('feature')
+
+    expect(candidates.length).toBe(2)
+  })
+
+  test('returns empty array when no matches', () => {
+    loopService.setState('feature-auth', createActiveState('feature-auth', 'session-1'))
+
+    const candidates = loopService.findCandidatesByPartialName('nonexistent')
+
+    expect(candidates).toEqual([])
+  })
+})
+
+describe('fetchSessionOutput', () => {
+  function createMockLogger() {
+    return {
+      log: () => {},
+      error: () => {},
+      debug: () => {},
+    }
+  }
+
+  const createMockV2Client = (messages: any[] = [], session: any = {}) => ({
+    session: {
+      messages: async () => ({ data: messages }),
+      get: async () => ({ data: session }),
+    },
+  } as any)
+
+  test('returns null when directory is empty', async () => {
+    const mockClient = createMockV2Client()
+    const logger = createMockLogger()
+
+    const result = await fetchSessionOutput(mockClient, 'session-1', '', logger)
+
+    expect(result).toBeNull()
+  })
+
+  test('returns null when sessionId is empty', async () => {
+    const mockClient = createMockV2Client()
+    const logger = createMockLogger()
+
+    const result = await fetchSessionOutput(mockClient, '', '/dir', logger)
+
+    expect(result).toBeNull()
+  })
+
+  test('extracts messages from assistant responses', async () => {
+    const messages = [
+      {
+        info: { role: 'assistant', cost: 0.01, tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } } },
+        parts: [{ type: 'text', text: 'Hello from assistant' }],
+      },
+      {
+        info: { role: 'user', cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+        parts: [{ type: 'text', text: 'User message' }],
+      },
+    ]
+    const mockClient = createMockV2Client(messages)
+    const logger = createMockLogger()
+
+    const result = await fetchSessionOutput(mockClient, 'session-1', '/tmp/test', logger)
+
+    expect(result).not.toBeNull()
+    expect(result?.messages.length).toBe(1)
+    expect(result?.messages[0].text).toContain('Hello from assistant')
+  })
+
+  test('calculates total cost and tokens', async () => {
+    const messages = [
+      {
+        info: { role: 'assistant', cost: 0.01, tokens: { input: 100, output: 50, reasoning: 10, cache: { read: 5, write: 2 } } },
+        parts: [{ type: 'text', text: 'First message' }],
+      },
+      {
+        info: { role: 'assistant', cost: 0.02, tokens: { input: 200, output: 100, reasoning: 20, cache: { read: 10, write: 4 } } },
+        parts: [{ type: 'text', text: 'Second message' }],
+      },
+    ]
+    const mockClient = createMockV2Client(messages)
+    const logger = createMockLogger()
+
+    const result = await fetchSessionOutput(mockClient, 'session-1', '/tmp/test', logger)
+
+    expect(result?.totalCost).toBe(0.03)
+    expect(result?.totalTokens.input).toBe(300)
+    expect(result?.totalTokens.output).toBe(150)
+    expect(result?.totalTokens.reasoning).toBe(30)
+    expect(result?.totalTokens.cacheRead).toBe(15)
+    expect(result?.totalTokens.cacheWrite).toBe(6)
+  })
+
+  test('includes file changes from session summary', async () => {
+    const messages = [
+      {
+        info: { role: 'assistant', cost: 0.01, tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } } },
+        parts: [{ type: 'text', text: 'Message' }],
+      },
+    ]
+    const session = {
+      summary: { additions: 10, deletions: 5, files: 3 },
+    }
+    const mockClient = createMockV2Client(messages, session)
+    const logger = createMockLogger()
+
+    const result = await fetchSessionOutput(mockClient, 'session-1', '/tmp/test', logger)
+
+    expect(result?.fileChanges).toEqual({ additions: 10, deletions: 5, files: 3 })
+  })
+
+  test('returns null on API error', async () => {
+    const mockClient = {
+      session: {
+        messages: async () => { throw new Error('API error') },
+        get: async () => { throw new Error('API error') },
+      },
+    } as any
+    const logger = createMockLogger()
+
+    const result = await fetchSessionOutput(mockClient, 'session-1', '/tmp/test', logger)
+
+    expect(result).toBeNull()
   })
 })

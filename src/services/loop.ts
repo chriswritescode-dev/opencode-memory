@@ -141,7 +141,8 @@ export function createLoopService(
 
 
   function redactCompletionSignal(text: string, promise: string): string {
-    return text.replaceAll(promise, '[SIGNAL_REDACTED]')
+    const regex = new RegExp(promise.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    return text.replace(regex, '[SIGNAL_REDACTED]')
   }
 
   function buildContinuationPrompt(state: LoopState, auditFindings?: string): string {

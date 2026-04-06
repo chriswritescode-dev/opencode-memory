@@ -3,7 +3,8 @@ import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plug
 import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
 import { readFileSync, existsSync } from 'fs'
 
-// Mirrors LOOP_PERMISSION_RULESET from services/loop (TUI cannot import from services due to separate bundling)
+// Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
+// This duplication is intentional to avoid circular dependencies
 const LOOP_PERMISSION_RULESET = [
   { permission: '*', pattern: '*', action: 'allow' as const },
   { permission: 'external_directory', pattern: '*', action: 'deny' as const },
