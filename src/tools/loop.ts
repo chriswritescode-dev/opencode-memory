@@ -3,7 +3,7 @@ import { execSync, spawnSync } from 'child_process'
 import { existsSync } from 'fs'
 import { resolve } from 'path'
 import type { ToolContext } from './types'
-import { withDimensionWarning } from './types'
+
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
 import { slugify } from '../utils/logger'
 import { findPartialMatch } from '../utils/partial-match'
@@ -32,7 +32,7 @@ async function setupLoop(
   ctx: ToolContext,
   options: LoopSetupOptions,
 ): Promise<string> {
-  const { v2, directory, config, loopService, loopHandler, logger, sandboxManager } = ctx
+  const { v2, directory, config, loopService, logger, sandboxManager } = ctx
   const autoWorktreeName = options.worktreeName ?? `loop-${slugify(options.sessionTitle.replace(/^Loop:\s*/i, ''))}`
   const projectDir = directory
   const maxIter = options.maxIterations ?? config.loop?.defaultMaxIterations ?? 0
@@ -237,7 +237,7 @@ async function setupLoop(
 }
 
 export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const { v2, loopService, loopHandler, config, directory, logger } = ctx
+  const { v2, loopService, loopHandler, config, logger } = ctx
 
   return {
     'memory-loop': tool({
@@ -247,7 +247,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
         title: z.string().describe('Short title for the session (shown in session list)'),
         worktree: z.boolean().optional().default(false).describe('Run in isolated git worktree instead of current directory'),
       },
-      execute: async (args, context) => {
+      execute: async (args, _context) => {
         if (config.loop?.enabled === false) {
           return 'Loops are disabled in plugin config. Use memory-plan-execute instead.'
         }

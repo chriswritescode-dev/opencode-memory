@@ -59,17 +59,7 @@ async function isWorkerRunning(pidPath: string, socketPath: string): Promise<boo
   }
 }
 
-function cleanupStale(pidPath: string, socketPath: string): void {
-  try {
-    if (existsSync(pidPath)) {
-      const pid = parseInt(readFileSync(pidPath, 'utf-8'), 10)
-      try { process.kill(pid, 0) } catch { unlinkSync(pidPath) }
-    }
-  } catch {}
-  try {
-    if (existsSync(socketPath)) unlinkSync(socketPath)
-  } catch {}
-}
+
 
 export function cleanupOrphanedWorkers(pidPath: string, socketPath: string): void {
   if (existsSync(socketPath) && !existsSync(pidPath)) {

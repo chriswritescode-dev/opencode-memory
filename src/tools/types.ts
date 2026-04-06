@@ -1,6 +1,6 @@
 import { tool } from '@opencode-ai/plugin'
 import type { Database } from 'bun:sqlite'
-import type { PluginConfig, Logger, MemoryScope } from '../types'
+import type { PluginConfig, Logger } from '../types'
 import type { EmbeddingProvider } from '../embedding'
 import type { VecService } from '../storage/vec-types'
 import type { MemoryService } from '../services/memory'

@@ -58,7 +58,7 @@ const commands: Record<string, CommandModule> = {
     },
   },
   upgrade: {
-    cli: async (args, globalOpts) => {
+    cli: async (_args, _globalOpts) => {
       const { run } = await import('./commands/upgrade')
       await run()
     },

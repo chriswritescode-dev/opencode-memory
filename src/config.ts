@@ -1,5 +1,5 @@
 import type { AgentRole, AgentDefinition, AgentConfig } from './agents'
-import type { PluginConfig } from './types'
+
 
 const REPLACED_BUILTIN_AGENTS = ['build', 'plan']
 

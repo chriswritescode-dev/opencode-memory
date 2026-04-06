@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'child_process'
+import { spawn } from 'child_process'
 import type { Logger } from '../types'
 
 export interface DockerExecOpts {

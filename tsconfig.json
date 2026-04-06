@@ -13,7 +13,11 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/solid",
-    "types": ["bun-types"]
+    "types": ["bun-types"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*"]
 }

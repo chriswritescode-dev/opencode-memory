@@ -1,5 +1,4 @@
 import type { DockerService } from './docker'
-import type { LoopService } from '../services/loop'
 import type { PluginConfig } from '../types'
 
 export interface SandboxContext {

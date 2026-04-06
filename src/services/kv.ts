@@ -19,7 +19,7 @@ export interface KvService {
   listByPrefix(projectId: string, prefix: string): KvEntry[]
 }
 
-export function createKvService(db: Database, logger?: Logger, defaultTtlMs?: number): KvService {
+export function createKvService(db: Database, _logger?: Logger, defaultTtlMs?: number): KvService {
   const queries = createKvQuery(db)
 
   return {
