@@ -2,3 +2,4 @@ dist/
 node_modules/
 *.tsbuildinfo
 .pnpm-store/
+.DS_Store

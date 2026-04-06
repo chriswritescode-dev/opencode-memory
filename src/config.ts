@@ -47,7 +47,7 @@ $ARGUMENTS`,
   'memory-loop-status': {
     description: 'Check status of all active memory loops',
     agent: 'code',
-    subtask: true,
+    subtask: false,
     template: `Check the status of all memory loops.
 
 ## Step 1: List Active Loops
@@ -56,7 +56,7 @@ Run \`memory-loop-status\` with no arguments to list all active loops for the cu
 
 ## Step 2: Get Detailed Status
 
-For each active loop found, run \`memory-loop-status\` with the loop name to get detailed status.
+For each active loop found, run \`memory-loop-status\` with the loop name to get detailed status. Token counts, iterations, last output.
 
 ## Step 3: Report
 
