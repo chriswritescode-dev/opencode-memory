@@ -163,6 +163,6 @@ All execution modes require a **title** — a short descriptive label for the se
 | Loop (worktree) | memory-loop | true | Full self-contained plan |
 | Loop | memory-loop | false | Full self-contained plan |
 
-"Full self-contained" means the plan must include every file path, implementation detail, code pattern, phase dependency, verification step, and gotcha. The receiving agent starts with zero context. Do NOT summarize, abbreviate, or include <promise> tags.
+"Full self-contained" means the plan must include every file path, implementation detail, code pattern, phase dependency, verification step, and gotcha. The receiving agent starts with zero context. Do NOT summarize or abbreviate.
 `,
 }

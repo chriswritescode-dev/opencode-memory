@@ -47,7 +47,7 @@ export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execu
 
   return async (
     input: { tool: string; sessionID: string; callID: string },
-    output: { args: unknown }
+    _output: { args: unknown }
   ) => {
     const worktreeName = loopService.resolveWorktreeName(input.sessionID)
     const state = worktreeName ? loopService.getActiveState(worktreeName) : null

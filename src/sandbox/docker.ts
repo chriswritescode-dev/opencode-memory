@@ -1,10 +1,11 @@
-import { spawn, spawnSync } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import type { Logger } from '../types'
 
 export interface DockerExecOpts {
   timeout?: number
   cwd?: string
   abort?: AbortSignal
+  stdin?: string
 }
 
 export interface DockerExecResult {
@@ -17,7 +18,7 @@ export interface DockerService {
   checkDocker(): Promise<boolean>
   imageExists(image: string): Promise<boolean>
   buildImage(dockerfilePath: string, tag: string): Promise<void>
-  createContainer(name: string, projectDir: string, image: string): Promise<void>
+  createContainer(name: string, projectDir: string, image: string, extraMounts?: string[]): Promise<void>
   removeContainer(name: string): Promise<void>
   exec(name: string, command: string, opts?: DockerExecOpts): Promise<DockerExecResult>
   execPipe(name: string, command: string, stdin: string, opts?: { timeout?: number; abort?: AbortSignal }): Promise<DockerExecResult>
@@ -74,7 +75,7 @@ export function createDockerService(logger: Logger): DockerService {
     })
   }
 
-  async function createContainer(name: string, projectDir: string, image: string): Promise<void> {
+  async function createContainer(name: string, projectDir: string, image: string, extraMounts?: string[]): Promise<void> {
     const args = [
       'run',
       '-d',
@@ -82,12 +83,15 @@ export function createDockerService(logger: Logger): DockerService {
       name,
       '-v',
       `${projectDir}:/workspace`,
-      '-w',
-      '/workspace',
-      image,
-      'sleep',
-      'infinity',
     ]
+
+    if (extraMounts) {
+      for (const mount of extraMounts) {
+        args.push('-v', mount)
+      }
+    }
+
+    args.push('-w', '/workspace', image, 'sleep', 'infinity')
 
     const result = await execPromise('docker', args, { timeout: 30000 })
     if (result.exitCode !== 0) {
@@ -129,62 +133,10 @@ export function createDockerService(logger: Logger): DockerService {
     stdin: string,
     opts?: { timeout?: number; abort?: AbortSignal },
   ): Promise<DockerExecResult> {
-    return new Promise((resolve, reject) => {
-      const timeout = opts?.timeout ?? DEFAULT_TIMEOUT
-      const child = spawn('docker', ['exec', '-i', name, 'sh', '-c', command], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-
-      let stdout = ''
-      let stderr = ''
-      let timedOut = false
-
-      const timeoutId = setTimeout(() => {
-        timedOut = true
-        child.kill('SIGTERM')
-        setTimeout(() => {
-          if (child.exitCode === null) {
-            child.kill('SIGKILL')
-          }
-        }, 5000)
-      }, timeout)
-
-      if (opts?.abort) {
-        opts.abort.addEventListener('abort', () => {
-          clearTimeout(timeoutId)
-          child.kill('SIGTERM')
-          setTimeout(() => {
-            if (child.exitCode === null) {
-              child.kill('SIGKILL')
-            }
-          }, 5000)
-        })
-      }
-
-      child.stdout.on('data', (data) => {
-        stdout += data.toString()
-      })
-
-      child.stderr.on('data', (data) => {
-        stderr += data.toString()
-      })
-
-      child.stdin.write(stdin)
-      child.stdin.end()
-
-      child.on('close', (code) => {
-        clearTimeout(timeoutId)
-        resolve({
-          stdout,
-          stderr,
-          exitCode: timedOut ? 124 : (code ?? 1),
-        })
-      })
-
-      child.on('error', (err) => {
-        clearTimeout(timeoutId)
-        reject(err)
-      })
+    return execPromise('docker', ['exec', '-i', name, 'sh', '-c', command], {
+      timeout: opts?.timeout ?? DEFAULT_TIMEOUT,
+      stdin,
+      abort: opts?.abort,
     })
   }
 
@@ -212,25 +164,38 @@ export function createDockerService(logger: Logger): DockerService {
   function execPromise(
     command: string,
     args: string[],
-    options?: { timeout?: number; streaming?: boolean; abort?: AbortSignal },
+    options?: { timeout?: number; streaming?: boolean; abort?: AbortSignal; stdin?: string },
   ): Promise<DockerExecResult> {
-    return new Promise((resolve, reject) => {
-      const timeout = options?.timeout ?? DEFAULT_TIMEOUT
-      const child = spawn(command, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT
+    const cmdPreview = args.slice(-1)[0]?.slice(0, 80) ?? ''
+
+    let hardDeadlineId: ReturnType<typeof setTimeout> | undefined
+
+    const inner = new Promise<DockerExecResult>((resolve) => {
+      const stdioConfig: 'pipe' | 'ignore' = options?.stdin ? 'pipe' : 'ignore'
+      const child: ChildProcess = spawn(command, args, {
+        stdio: [stdioConfig, 'pipe', 'pipe'],
       })
 
       let stdout = ''
       let stderr = ''
       let timedOut = false
-      const cmdPreview = args.slice(-1)[0]?.slice(0, 80) ?? ''
+      let settled = false
+
+      function settle(result: DockerExecResult): void {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutId)
+        clearTimeout(hardDeadlineId)
+        resolve(result)
+      }
 
       const timeoutId = setTimeout(() => {
         timedOut = true
         logger.log(`[docker] timeout (${timeout}ms) for: ${cmdPreview}`)
         child.kill('SIGTERM')
         setTimeout(() => {
-          if (child.exitCode === null) {
+          if (!settled) {
             logger.log(`[docker] SIGKILL after SIGTERM for: ${cmdPreview}`)
             child.kill('SIGKILL')
           }
@@ -239,14 +204,11 @@ export function createDockerService(logger: Logger): DockerService {
 
       if (options?.abort) {
         const onAbort = () => {
-          clearTimeout(timeoutId)
           logger.log(`[docker] abort signal for: ${cmdPreview}`)
           child.kill('SIGTERM')
           setTimeout(() => {
-            if (child.exitCode === null) {
-              child.kill('SIGKILL')
-            }
-          }, 3000)
+            if (!settled) child.kill('SIGKILL')
+          }, 5000)
         }
         if (options.abort.aborted) {
           onAbort()
@@ -255,32 +217,49 @@ export function createDockerService(logger: Logger): DockerService {
         }
       }
 
-      child.stdout.on('data', (data) => {
+      child.stdout!.on('data', (data: Buffer) => {
         stdout += data.toString()
       })
 
-      child.stderr.on('data', (data) => {
+      child.stderr!.on('data', (data: Buffer) => {
         stderr += data.toString()
       })
 
-      child.on('close', (code) => {
-        clearTimeout(timeoutId)
+      if (options?.stdin) {
+        child.stdin!.write(options.stdin)
+        child.stdin!.end()
+      }
+
+      child.on('close', (code: number | null) => {
         if (timedOut) {
           logger.log(`[docker] close after timeout, code=${code} for: ${cmdPreview}`)
         }
-        resolve({
+        settle({
           stdout,
           stderr,
           exitCode: timedOut ? 124 : (code ?? 1),
         })
       })
 
-      child.on('error', (err) => {
-        clearTimeout(timeoutId)
+      child.on('error', (err: Error) => {
         logger.log(`[docker] spawn error: ${err.message} for: ${cmdPreview}`)
-        reject(err)
+        settle({
+          stdout,
+          stderr: stderr + err.message,
+          exitCode: 1,
+        })
       })
     })
+
+    const hardDeadline = timeout + 10_000
+    const deadlinePromise = new Promise<DockerExecResult>((resolve) => {
+      hardDeadlineId = setTimeout(() => {
+        logger.log(`[docker] hard deadline (${hardDeadline}ms) hit for: ${cmdPreview}`)
+        resolve({ stdout: '', stderr: `Command exceeded hard deadline of ${hardDeadline}ms`, exitCode: 124 })
+      }, hardDeadline)
+    })
+
+    return Promise.race([inner, deadlinePromise])
   }
 
   return {

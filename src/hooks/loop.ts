@@ -1,11 +1,12 @@
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { OpencodeClient } from '@opencode-ai/sdk/v2'
 import type { LoopService, LoopState } from '../services/loop'
-import { MAX_RETRIES, MAX_CONSECUTIVE_STALLS } from '../services/loop'
-import type { Logger, PluginConfig, LoopConfig } from '../types'
-import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
+import { MAX_RETRIES, MAX_CONSECUTIVE_STALLS, LOOP_PERMISSION_RULESET } from '../services/loop'
+import type { Logger, PluginConfig } from '../types'
+import { retryWithModelFallback } from '../utils/model-fallback'
+import { resolveLoopModel } from '../utils/loop-helpers'
 import { execSync, spawnSync } from 'child_process'
-import { resolve, join } from 'path'
+import { resolve } from 'path'
 import type { createSandboxManager } from '../sandbox/manager'
 
 export interface LoopEventHandler {
@@ -19,7 +20,7 @@ export interface LoopEventHandler {
 
 export function createLoopEventHandler(
   loopService: LoopService,
-  client: PluginInput['client'],
+  _client: PluginInput['client'],
   v2Client: OpencodeClient,
   logger: Logger,
   getConfig: () => PluginConfig,
@@ -54,15 +55,6 @@ export function createLoopEventHandler(
     let cleaned = false
 
     try {
-      // Remove the opencode.jsonc file we wrote for permissions - don't commit it
-      try {
-        const { unlinkSync } = await import('fs')
-        unlinkSync(join(state.worktreeDir, 'opencode.jsonc'))
-        logger.log(`Loop: removed opencode.jsonc before commit`)
-      } catch {
-        // File may not exist, ignore
-      }
-
       const addResult = spawnSync('git', ['add', '-A'], { cwd: state.worktreeDir, encoding: 'utf-8' })
       if (addResult.status !== 0) {
         throw new Error(addResult.stderr || 'git add failed')
@@ -260,9 +252,8 @@ export function createLoopEventHandler(
       })
     }
 
-    let commitResult: { committed: boolean; cleaned: boolean } | undefined
     if (reason === 'completed' || reason === 'cancelled') {
-      commitResult = await commitAndCleanupWorktree(state)
+      await commitAndCleanupWorktree(state)
     }
 
     if (state.sandbox && state.sandboxContainerName && sandboxManager) {
@@ -275,8 +266,7 @@ export function createLoopEventHandler(
     }
   }
 
-  async function handlePromptError(worktreeName: string, state: LoopState, context: string, err: unknown, retryFn?: () => Promise<void>): Promise<void> {
-    const sessionId = state.sessionId
+  async function handlePromptError(worktreeName: string, _state: LoopState, context: string, err: unknown, retryFn?: () => Promise<void>): Promise<void> {
     const currentState = loopService.getActiveState(worktreeName)
     if (!currentState?.active) {
       logger.log(`Loop: loop ${worktreeName} already terminated, ignoring error: ${context}`)
@@ -310,7 +300,7 @@ export function createLoopEventHandler(
     }
   }
 
-  async function getLastAssistantInfo(sessionId: string, worktreeDir: string): Promise<{ text: string | null; error: string | null }> {
+  async function getLastAssistantInfo(sessionId: string, worktreeDir: string): Promise<{ text: string | null; error: string | null; lastMessageRole: string }> {
     try {
       const messagesResult = await v2Client.session.messages({
         sessionID: sessionId,
@@ -323,9 +313,14 @@ export function createLoopEventHandler(
         parts: Array<{ type: string; text?: string }>
       }>
 
+      const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null
       const lastAssistant = [...messages].reverse().find((m) => m.info.role === 'assistant')
 
-      if (!lastAssistant) return { text: null, error: null }
+      if (!lastAssistant) {
+        const role = lastMessage?.info.role ?? 'none'
+        logger.log(`Loop: no assistant message found in session ${sessionId}, last message role: ${role}`)
+        return { text: null, error: null, lastMessageRole: role }
+      }
 
       const text = lastAssistant.parts
         .filter((p) => p.type === 'text' && typeof p.text === 'string')
@@ -334,10 +329,10 @@ export function createLoopEventHandler(
 
       const error = lastAssistant.info.error?.data?.message ?? lastAssistant.info.error?.name ?? null
 
-      return { text, error }
+      return { text, error, lastMessageRole: 'assistant' }
     } catch (err) {
       logger.error(`Loop: could not read session messages`, err)
-      return { text: null, error: null }
+      return { text: null, error: null, lastMessageRole: 'error' }
     }
   }
 
@@ -347,6 +342,7 @@ export function createLoopEventHandler(
     const createParams = {
       title: state.worktreeName,
       directory: state.worktreeDir,
+      permission: LOOP_PERMISSION_RULESET,
     }
 
     const createResult = await v2Client.session.create(createParams)
@@ -384,7 +380,7 @@ export function createLoopEventHandler(
     return newSessionId
   }
 
-  async function handleCodingPhase(worktreeName: string, state: LoopState): Promise<void> {
+  async function handleCodingPhase(worktreeName: string, _state: LoopState): Promise<void> {
     let currentState = loopService.getActiveState(worktreeName)
     if (!currentState?.active) {
       logger.log(`Loop: loop ${worktreeName} no longer active, skipping coding phase`)
@@ -398,8 +394,12 @@ export function createLoopEventHandler(
     }
 
     let assistantErrorDetected = false
-    if (currentState.completionPromise) {
-      const { text: textContent, error: assistantError } = await getLastAssistantInfo(currentState.sessionId, currentState.worktreeDir)
+    if (currentState.completionSignal) {
+      const { text: textContent, error: assistantError, lastMessageRole } = await getLastAssistantInfo(currentState.sessionId, currentState.worktreeDir)
+      if (lastMessageRole !== 'assistant') {
+        logger.error(`Loop: assistant message not found in coding phase (last message: ${lastMessageRole}), session may not have responded yet`)
+        return
+      }
       if (assistantError) {
         assistantErrorDetected = true
         logger.error(`Loop: assistant error detected in coding phase: ${assistantError}`)
@@ -415,14 +415,14 @@ export function createLoopEventHandler(
           currentState = loopService.getActiveState(worktreeName)!
         }
       }
-      if (textContent && currentState.completionPromise && loopService.checkCompletionPromise(textContent, currentState.completionPromise)) {
+      if (textContent && currentState.completionSignal && loopService.checkCompletionSignal(textContent, currentState.completionSignal)) {
         const currentAuditCount = currentState.auditCount ?? 0
         if (!currentState.audit || currentAuditCount >= minAudits) {
           if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
             logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
           } else {
             await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected ${currentState.completionPromise} at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
+            logger.log(`Loop completed: detected ${currentState.completionSignal} at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
             return
           }
         } else {
@@ -498,12 +498,8 @@ export function createLoopEventHandler(
     logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
 
     const currentConfig = getConfig()
-    const freshStateForModel = loopService.getActiveState(worktreeName)
-    const loopModel = freshStateForModel?.modelFailed
-      ? undefined
-      : (parseModelString(currentConfig.loop?.model) ?? parseModelString(currentConfig.executionModel))
-
-    if (freshStateForModel?.modelFailed) {
+    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
+    if (!loopModel) {
       logger.log(`Loop: configured model previously failed, using default model`)
     }
 
@@ -562,7 +558,7 @@ export function createLoopEventHandler(
     consecutiveStalls.set(worktreeName, 0)
   }
 
-  async function handleAuditingPhase(worktreeName: string, state: LoopState): Promise<void> {
+  async function handleAuditingPhase(worktreeName: string, _state: LoopState): Promise<void> {
     // Re-fetch and validate state to catch aborts that happened during idle event processing
     let currentState = loopService.getActiveState(worktreeName)
     if (!currentState?.active) {
@@ -576,7 +572,12 @@ export function createLoopEventHandler(
       return
     }
 
-    const { text: auditText, error: assistantError } = await getLastAssistantInfo(currentState.sessionId, currentState.worktreeDir)
+    const { text: auditText, error: assistantError, lastMessageRole } = await getLastAssistantInfo(currentState.sessionId, currentState.worktreeDir)
+
+    if (lastMessageRole !== 'assistant') {
+      logger.error(`Loop: assistant message not found in auditing phase (last message: ${lastMessageRole}), session may not have responded yet`)
+      return
+    }
 
     let assistantErrorDetected = false
     if (assistantError) {
@@ -608,14 +609,14 @@ export function createLoopEventHandler(
     // Always pass the full audit response to the code agent
     const auditFindings = auditText ?? undefined
 
-    if (currentState.completionPromise && auditText) {
-      if (loopService.checkCompletionPromise(auditText, currentState.completionPromise)) {
+    if (currentState.completionSignal && auditText) {
+      if (loopService.checkCompletionSignal(auditText, currentState.completionSignal)) {
         if (!currentState.audit || newAuditCount >= minAudits) {
           if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
             logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
           } else {
             await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected ${currentState.completionPromise} in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
+            logger.log(`Loop completed: detected ${currentState.completionSignal} in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
             return
           }
         } else {
@@ -654,12 +655,8 @@ export function createLoopEventHandler(
     logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
 
     const currentConfig = getConfig()
-    const freshStateForModel = loopService.getActiveState(worktreeName)
-    const loopModel = freshStateForModel?.modelFailed
-      ? undefined
-      : (parseModelString(currentConfig.loop?.model) ?? parseModelString(currentConfig.executionModel))
-
-    if (freshStateForModel?.modelFailed) {
+    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
+    if (!loopModel) {
       logger.log(`Loop: configured model previously failed, using default model`)
     }
 

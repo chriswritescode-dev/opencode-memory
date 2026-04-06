@@ -1,5 +1,4 @@
 import type { Plugin, PluginInput, Hooks } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin'
 import { createOpencodeClient as createV2Client } from '@opencode-ai/sdk/v2'
 import { agents } from './agents'
 import { createConfigHandler } from './config'
@@ -16,11 +15,10 @@ import { resolveLogPath } from './storage'
 import { createLogger } from './utils/logger'
 import { createDockerService } from './sandbox/docker'
 import { createSandboxManager } from './sandbox/manager'
-import { join } from 'path'
 import type { PluginConfig, CompactionConfig } from './types'
-import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad, scopeEnum } from './tools'
+import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad } from './tools'
 import { createSandboxToolBeforeHook, createSandboxToolAfterHook } from './hooks/sandbox-tools'
-import type { DimensionMismatchState, InitState, ToolContext } from './tools'
+import type { DimensionMismatchState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
 
 
@@ -77,7 +75,11 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     const kvService = createKvService(db, logger, config.defaultKvTtlMs)
 
     const loopService = createLoopService(kvService, projectId, logger, config.loop)
-    migrateRalphKeys(kvService, projectId, logger).catch(() => {})
+    try {
+      migrateRalphKeys(kvService, projectId, logger)
+    } catch (err) {
+      logger.error('Failed to migrate ralph: KV entries', err)
+    }
 
     const activeSandboxLoops = loopService.listActive().filter(s => s.sandbox && s.worktreeName)
 
@@ -91,7 +93,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       const dockerService = createDockerService(logger)
       try {
         sandboxManager = createSandboxManager(dockerService, {
-          image: config.sandbox.image || 'ocm-sandbox:latest',
+          image: config.sandbox?.image || 'ocm-sandbox:latest',
         }, logger)
         logger.log('Docker sandbox manager initialized')
       } catch (err) {
@@ -201,15 +203,6 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
             }
           }
         }
-        const sandboxAny = sandboxManager as any
-        if (sandboxAny.isGlobalActive?.()) {
-          try {
-            await sandboxAny.stopGlobal?.()
-            logger.log('Cleanup: stopped global sandbox container')
-          } catch (err) {
-            logger.error('Cleanup: failed to stop global sandbox container', err)
-          }
-        }
       }
 
       loopHandler.terminateAll()
@@ -303,18 +296,19 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         await toolExecuteAfterHook!(input, output)
       },
       'permission.ask': async (input, output) => {
-        const req = input as unknown as { sessionID: string; permission: string; patterns: string[] }
-        const worktreeName = loopService.resolveWorktreeName(req.sessionID)
+        const worktreeName = loopService.resolveWorktreeName(input.sessionID)
         const state = worktreeName ? loopService.getActiveState(worktreeName) : null
         if (!state?.active) return
 
-        if (req.patterns.some((p) => p.startsWith('git push'))) {
-          logger.log(`Loop: denied git push for session ${req.sessionID}`)
+        const patterns = Array.isArray(input.pattern) ? input.pattern : (input.pattern ? [input.pattern] : [])
+
+        if (patterns.some((p) => p.startsWith('git push'))) {
+          logger.log(`Loop: denied git push for session ${input.sessionID}`)
           output.status = 'deny'
           return
         }
 
-        logger.log(`Loop: auto-allowing ${req.permission} [${req.patterns.join(', ')}] for session ${req.sessionID}`)
+        logger.log(`Loop: auto-allowing ${input.type} [${patterns.join(', ')}] for session ${input.sessionID}`)
         output.status = 'allow'
       },
       'experimental.session.compacting': async (input, output) => {

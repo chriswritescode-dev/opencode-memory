@@ -419,10 +419,24 @@ The `Memory: Show loops` command is registered in the command palette when loops
 
 ### Setup
 
-When installed via npm, the TUI plugin loads automatically. For local development, add the built TUI file to your `~/.config/opencode/tui.json`:
+When installed via npm, the TUI plugin loads automatically when added to your TUI config. The plugin is auto-detected via the `./tui` export in `package.json`.
+
+Add to your `~/.config/opencode/tui.json` or project-level `tui.json`:
 
 ```json
 {
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": [
+    "@opencode-manager/memory"
+  ]
+}
+```
+
+For local development, reference the built TUI file directly:
+
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
   "plugin": [
     "/path/to/opencode-memory/dist/tui.js"
   ]

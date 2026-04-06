@@ -6,6 +6,7 @@ import { createPlanExecuteTools } from './plan-execute'
 import { createLoopTools } from './loop'
 import { createSandboxFsTools } from './sandbox-fs'
 import type { ToolContext } from './types'
+import { isSandboxEnabled } from '../sandbox/context'
 
 export { autoValidateOnLoad } from './health'
 export { createToolExecuteBeforeHook, createToolExecuteAfterHook } from './plan-approval'
@@ -13,7 +14,7 @@ export { scopeEnum } from './types'
 export type { ToolContext, DimensionMismatchState, InitState } from './types'
 
 export function createTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const sandboxEnabled = ctx.config.sandbox?.mode === 'docker' && !!ctx.sandboxManager
+  const sandboxEnabled = isSandboxEnabled(ctx.config, ctx.sandboxManager)
   return {
     ...createMemoryTools(ctx),
     ...createKvTools(ctx),

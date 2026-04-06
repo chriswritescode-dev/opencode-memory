@@ -1,24 +1,24 @@
 import { tool } from '@opencode-ai/plugin'
 import { execSync, spawnSync } from 'child_process'
-import { existsSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync } from 'fs'
 import { resolve } from 'path'
 import type { ToolContext } from './types'
-import { withDimensionWarning } from './types'
+
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
 import { slugify } from '../utils/logger'
 import { findPartialMatch } from '../utils/partial-match'
 import { formatSessionOutput, formatAuditResult } from '../utils/loop-format'
-import { fetchSessionOutput, MAX_RETRIES, type LoopState, type LoopSessionOutput } from '../services/loop'
+import { fetchSessionOutput, MAX_RETRIES, LOOP_PERMISSION_RULESET, buildCompletionSignalInstructions, DEFAULT_COMPLETION_SIGNAL, type LoopState, type LoopSessionOutput } from '../services/loop'
+import { isSandboxEnabled } from '../sandbox/context'
+import { formatDuration, computeElapsedSeconds } from '../utils/loop-helpers'
 
 const z = tool.schema
-const DEFAULT_PLAN_COMPLETION_PROMISE = '<promise>ALL_PHASES_COMPLETE</promise>'
 
 interface LoopSetupOptions {
   prompt: string
   sessionTitle: string
   worktreeName?: string
-  completionPromise: string | null
+  completionSignal: string | null
   maxIterations: number
   audit: boolean
   agent?: string
@@ -31,7 +31,7 @@ async function setupLoop(
   ctx: ToolContext,
   options: LoopSetupOptions,
 ): Promise<string> {
-  const { v2, directory, config, loopService, loopHandler, logger, sandboxManager } = ctx
+  const { v2, directory, config, loopService, logger, sandboxManager } = ctx
   const autoWorktreeName = options.worktreeName ?? `loop-${slugify(options.sessionTitle.replace(/^Loop:\s*/i, ''))}`
   const projectDir = directory
   const maxIter = options.maxIterations ?? config.loop?.defaultMaxIterations ?? 0
@@ -49,13 +49,14 @@ async function setupLoop(
     let currentBranch: string | undefined
     try {
       currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, encoding: 'utf-8' }).trim()
-    } catch (err) {
+    } catch (_err) {
       logger.log(`loop: no git branch detected, running without branch info`)
     }
 
     const createResult = await v2.session.create({
       title: options.sessionTitle,
       directory: projectDir,
+      permission: LOOP_PERMISSION_RULESET,
     })
 
     if (createResult.error || !createResult.data) {
@@ -85,6 +86,7 @@ async function setupLoop(
     const createResult = await v2.session.create({
       title: options.sessionTitle,
       directory: worktreeInfo.directory,
+      permission: LOOP_PERMISSION_RULESET,
     })
 
     if (createResult.error || !createResult.data) {
@@ -105,23 +107,8 @@ async function setupLoop(
     }
   }
 
-  if (loopContext.worktree) {
-    try {
-      const loopConfig = JSON.stringify({
-        permission: {
-          bash: { '*': 'allow', 'git push *': 'deny' },
-          external_directory: { '*': 'deny' },
-        },
-      }, null, 2)
-      writeFileSync(join(loopContext.directory, 'opencode.jsonc'), loopConfig)
-      logger.log(`loop: wrote loop opencode.jsonc to ${loopContext.directory}`)
-    } catch (err) {
-      logger.error(`loop: failed to write opencode.jsonc`, err)
-    }
-  }
-
   let sandboxContainerName: string | undefined
-  const sandboxEnabled = config.sandbox?.mode === 'docker' && !!sandboxManager && !!options.worktree
+  const sandboxEnabled = isSandboxEnabled(config, sandboxManager) && !!options.worktree
 
   if (sandboxEnabled) {
     try {
@@ -143,7 +130,7 @@ async function setupLoop(
     worktreeBranch: loopContext.branch,
     iteration: 1,
     maxIterations: maxIter,
-    completionPromise: options.completionPromise,
+    completionSignal: options.completionSignal,
     startedAt: new Date().toISOString(),
     prompt: options.prompt,
     phase: 'coding',
@@ -160,8 +147,8 @@ async function setupLoop(
   logger.log(`loop: state stored for worktree=${autoWorktreeName}`)
 
   let promptText = options.prompt
-  if (options.completionPromise) {
-    promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${options.completionPromise}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
+  if (options.completionSignal) {
+    promptText += buildCompletionSignalInstructions(options.completionSignal)
   }
 
   const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
@@ -237,7 +224,7 @@ async function setupLoop(
   lines.push(
     `Model: ${modelInfo}`,
     `Max iterations: ${maxInfo}`,
-    `Completion promise: ${options.completionPromise ?? 'none'}`,
+    `Completion promise: ${options.completionSignal ?? 'none'}`,
     `Audit: ${auditInfo}`,
     '',
     'The loop will automatically continue when the session goes idle.',
@@ -249,7 +236,7 @@ async function setupLoop(
 }
 
 export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const { v2, loopService, loopHandler, config, directory, logger } = ctx
+  const { v2, loopService, loopHandler, config, logger } = ctx
 
   return {
     'memory-loop': tool({
@@ -259,7 +246,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
         title: z.string().describe('Short title for the session (shown in session list)'),
         worktree: z.boolean().optional().default(false).describe('Run in isolated git worktree instead of current directory'),
       },
-      execute: async (args, context) => {
+      execute: async (args, _context) => {
         if (config.loop?.enabled === false) {
           return 'Loops are disabled in plugin config. Use memory-plan-execute instead.'
         }
@@ -273,7 +260,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
         return setupLoop(ctx, {
           prompt: args.plan,
           sessionTitle: `Loop: ${sessionTitle}`,
-          completionPromise: DEFAULT_PLAN_COMPLETION_PROMISE,
+          completionSignal: DEFAULT_COMPLETION_SIGNAL,
           maxIterations: config.loop?.defaultMaxIterations ?? 0,
           audit: audit,
           agent: 'code',
@@ -390,6 +377,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           const createParams = {
             title: stoppedState.worktreeName!,
             directory: stoppedState.worktreeDir!,
+            permission: LOOP_PERMISSION_RULESET,
           }
 
           const createResult = await v2.session.create(createParams)
@@ -403,7 +391,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
           loopService.deleteState(stoppedState.worktreeName!)
 
-          const restartSandbox = config.sandbox?.mode === 'docker' && !!ctx.sandboxManager
+          const restartSandbox = isSandboxEnabled(config, ctx.sandboxManager)
           if (restartSandbox) {
             try {
               const sbxResult = await ctx.sandboxManager!.start(stoppedState.worktreeName!, stoppedState.worktreeDir!)
@@ -422,7 +410,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
             worktreeBranch: stoppedState.worktreeBranch,
             iteration: stoppedState.iteration!,
             maxIterations: stoppedState.maxIterations!,
-            completionPromise: stoppedState.completionPromise,
+            completionSignal: stoppedState.completionSignal,
             startedAt: new Date().toISOString(),
             prompt: stoppedState.prompt,
             phase: 'coding',
@@ -440,8 +428,8 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           loopService.registerSession(newSessionId, stoppedState.worktreeName!)
 
           let promptText = stoppedState.prompt ?? ''
-          if (stoppedState.completionPromise) {
-            promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${stoppedState.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
+          if (stoppedState.completionSignal) {
+            promptText += buildCompletionSignalInstructions(stoppedState.completionSignal)
           }
 
           const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
@@ -500,12 +488,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
             const lines: string[] = ['Recently Completed Memory Loops', '']
             recent.forEach((s, i) => {
-              const duration = s.completedAt && s.startedAt
-                ? Math.round((new Date(s.completedAt).getTime() - new Date(s.startedAt).getTime()) / 1000)
-                : 0
-              const minutes = Math.floor(duration / 60)
-              const seconds = duration % 60
-              const durationStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+              const durationStr = formatDuration(computeElapsedSeconds(s.startedAt, s.completedAt))
               lines.push(`${i + 1}. ${s.worktreeName}`)
               lines.push(`   Reason: ${s.terminationReason ?? 'unknown'} | Iterations: ${s.iteration} | Duration: ${durationStr} | Completed: ${s.completedAt ?? 'unknown'}`)
               lines.push('')
@@ -514,7 +497,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
             return lines.join('\n')
           }
 
-          let statuses: Record<string, { type: string; attempt?: number; message?: string; next?: number }> = {}
+          const statuses: Record<string, { type: string; attempt?: number; message?: string; next?: number }> = {}
           try {
             const uniqueDirs = [...new Set(active.map((s) => s.worktreeDir).filter(Boolean))]
             const results = await Promise.allSettled(
@@ -530,10 +513,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
           const lines: string[] = [`Active Memory Loops (${active.length})`, '']
           active.forEach((s, i) => {
-            const elapsed = s.startedAt ? Math.round((Date.now() - new Date(s.startedAt).getTime()) / 1000) : 0
-            const minutes = Math.floor(elapsed / 60)
-            const seconds = elapsed % 60
-            const duration = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+            const duration = formatDuration(computeElapsedSeconds(s.startedAt))
             const iterInfo = s.maxIterations && s.maxIterations > 0 ? `${s.iteration} / ${s.maxIterations}` : `${s.iteration} (unlimited)`
             const sessionStatus = statuses[s.sessionId]?.type ?? 'unavailable'
             const modeIndicator = !s.worktree ? ' (in-place)' : ''
@@ -550,12 +530,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
             lines.push('')
             const limitedRecent = recent.slice(0, 10)
             limitedRecent.forEach((s, i) => {
-              const duration = s.completedAt && s.startedAt
-                ? Math.round((new Date(s.completedAt).getTime() - new Date(s.startedAt).getTime()) / 1000)
-                : 0
-              const minutes = Math.floor(duration / 60)
-              const seconds = duration % 60
-              const durationStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+              const durationStr = formatDuration(computeElapsedSeconds(s.startedAt, s.completedAt))
               lines.push(`${i + 1}. ${s.worktreeName}`)
               lines.push(`   Reason: ${s.terminationReason ?? 'unknown'} | Iterations: ${s.iteration} | Duration: ${durationStr} | Completed: ${s.completedAt ?? 'unknown'}`)
               lines.push('')
@@ -581,12 +556,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
         if (!state.active) {
           const maxInfo = state.maxIterations && state.maxIterations > 0 ? `${state.iteration} / ${state.maxIterations}` : `${state.iteration} (unlimited)`
-          const duration = state.completedAt && state.startedAt
-            ? Math.round((new Date(state.completedAt).getTime() - new Date(state.startedAt).getTime()) / 1000)
-            : 0
-          const minutes = Math.floor(duration / 60)
-          const seconds = duration % 60
-          const durationStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+          const durationStr = formatDuration(computeElapsedSeconds(state.startedAt, state.completedAt))
 
           const statusLines: string[] = [
             'Loop Status (Inactive)',
@@ -643,10 +613,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           sessionStatus = 'unavailable'
         }
 
-        const elapsed = state.startedAt ? Math.round((Date.now() - new Date(state.startedAt).getTime()) / 1000) : 0
-        const minutes = Math.floor(elapsed / 60)
-        const seconds = elapsed % 60
-        const duration = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+        const duration = formatDuration(computeElapsedSeconds(state.startedAt))
 
         const stallInfo = loopHandler.getStallInfo(state.worktreeName)
         const secondsSinceActivity = stallInfo
@@ -696,7 +663,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
         statusLines.push(
           '',
-          `Completion promise: ${state.completionPromise ?? 'none'}`,
+          `Completion promise: ${state.completionSignal ?? 'none'}`,
           `Started: ${state.startedAt}`,
           ...(state.errorCount && state.errorCount > 0 ? [`Error count: ${state.errorCount} (retries before termination: ${MAX_RETRIES})`] : []),
           `Audit count: ${state.auditCount ?? 0}`,

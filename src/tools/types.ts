@@ -1,6 +1,6 @@
 import { tool } from '@opencode-ai/plugin'
 import type { Database } from 'bun:sqlite'
-import type { PluginConfig, Logger, MemoryScope } from '../types'
+import type { PluginConfig, Logger } from '../types'
 import type { EmbeddingProvider } from '../embedding'
 import type { VecService } from '../storage/vec-types'
 import type { MemoryService } from '../services/memory'
@@ -13,6 +13,7 @@ import type { PluginInput } from '@opencode-ai/plugin'
 import type { createSandboxManager } from '../sandbox/manager'
 
 const z = tool.schema
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- z.enum() type doesn't match tool.schema interface
 export const scopeEnum = z.enum(['convention', 'decision', 'context']) as any
 
 export interface DimensionMismatchState {

@@ -2,7 +2,7 @@ import { createHash } from 'crypto'
 import type { EmbeddingProvider } from './types'
 import type { EmbeddingConfig } from '../types'
 import { ApiEmbeddingProvider } from './api'
-import { LocalEmbeddingProvider } from './local'
+
 import { SharedEmbeddingClient } from './client'
 import { resolveDataDir } from '../storage/database'
 import type { CacheService } from '../cache/types'

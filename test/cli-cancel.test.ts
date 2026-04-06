@@ -3,26 +3,7 @@ import { Database } from 'bun:sqlite'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { mkdtempSync, rmSync } from 'fs'
-
-interface LoopState {
-  sessionId: string
-  worktreeName: string
-  worktreeBranch: string
-  worktreeDir: string
-  worktree: boolean
-  iteration: number
-  maxIterations: number
-  phase: 'coding' | 'auditing'
-  startedAt: string
-  completedAt?: string
-  terminationReason?: string
-  active: boolean
-  audit: boolean
-  errorCount: number
-  auditCount: number
-  completionPromise?: string
-  lastAuditResult?: string
-}
+import { type LoopState } from '../src/services/loop'
 
 function createTestKvDb(tempDir: string): Database {
   const dbPath = join(tempDir, 'memory.db')
@@ -57,6 +38,8 @@ function insertLoopState(db: Database, projectId: string, worktreeName: string, 
     audit: false,
     errorCount: 0,
     auditCount: 0,
+    completionSignal: null,
+    lastAuditResult: undefined,
     ...state,
   }
 

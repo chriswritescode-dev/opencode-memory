@@ -2,6 +2,14 @@
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui'
 import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
 import { readFileSync, existsSync } from 'fs'
+
+// Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
+// This duplication is intentional to avoid circular dependencies
+const LOOP_PERMISSION_RULESET = [
+  { permission: '*', pattern: '*', action: 'allow' as const },
+  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
+  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
+]
 import { homedir, platform } from 'os'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -172,7 +180,7 @@ async function restartLoop(projectId: string, loopName: string, api: TuiPluginAp
 
     const directory = state.worktreeDir
     if (!directory) return null
-    const createResult = await api.client.session.create({ directory, title: loopName })
+    const createResult = await api.client.session.create({ directory, title: loopName, permission: LOOP_PERMISSION_RULESET })
     if (createResult.error || !createResult.data) return null
     
     const newSessionId = createResult.data.id
@@ -199,8 +207,9 @@ async function restartLoop(projectId: string, loopName: string, api: TuiPluginAp
     )
 
     let promptText = state.prompt ?? ''
-    if (state.completionPromise) {
-      promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${state.completionPromise}\n\nDo NOT output this phrase until every phase is truly complete. The loop will continue until this signal is detected.`
+    if (state.completionSignal) {
+      const completionInstructions = `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${state.completionSignal}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
+      promptText += completionInstructions
     }
 
     await api.client.session.promptAsync({

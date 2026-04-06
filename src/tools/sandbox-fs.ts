@@ -1,27 +1,9 @@
 import { tool } from '@opencode-ai/plugin'
 import type { ToolContext } from './types'
 import { toContainerPath, rewriteOutput } from '../sandbox/path'
+import { getSandboxForSession } from '../sandbox/context'
 
 const z = tool.schema
-
-function getSandboxForSession(ctx: ToolContext, sessionId: string) {
-  if (!ctx.sandboxManager) return null
-
-  const worktreeName = ctx.loopService.resolveWorktreeName(sessionId)
-  if (!worktreeName) return null
-
-  const state = ctx.loopService.getActiveState(worktreeName)
-  if (!state?.active || !state.sandbox) return null
-
-  const active = ctx.sandboxManager.getActive(worktreeName)
-  if (!active) return null
-
-  return {
-    docker: ctx.sandboxManager.docker,
-    containerName: active.containerName,
-    hostDir: active.projectDir,
-  }
-}
 
 export function createSandboxFsTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
   return {
@@ -124,7 +106,6 @@ export function createSandboxFsTools(ctx: ToolContext): Record<string, ReturnTyp
             grouped.get(filePath)!.push({ line: lineNum, text: truncatedText })
           }
 
-          let totalMatches = 0
           const outputParts: string[] = []
           outputParts.push(`Found ${lines.length} matches`)
 
@@ -132,7 +113,6 @@ export function createSandboxFsTools(ctx: ToolContext): Record<string, ReturnTyp
             outputParts.push(`${filePath}:`)
             for (const m of matches) {
               outputParts.push(`  Line ${m.line}: ${m.text}`)
-              totalMatches++
             }
             outputParts.push('')
           }

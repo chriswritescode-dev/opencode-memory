@@ -3,31 +3,31 @@ import type { Logger, LoopConfig } from '../types'
 import type { OpencodeClient } from '@opencode-ai/sdk/v2'
 import { findPartialMatch } from '../utils/partial-match'
 
-export async function migrateRalphKeys(kvService: KvService, projectId: string, logger: Logger): Promise<void> {
-  const oldEntries = await kvService.listByPrefix(projectId, 'ralph:')
+export function migrateRalphKeys(kvService: KvService, projectId: string, logger: Logger): void {
+  const oldEntries = kvService.listByPrefix(projectId, 'ralph:')
   if (oldEntries.length === 0) return
   
-  logger.log(`Migrating ${oldEntries.length} ralph: KV entries to loop: prefix`)
+  logger.log(`Migrating ${String(oldEntries.length)} ralph: KV entries to loop: prefix`)
   for (const entry of oldEntries) {
     const newKey = entry.key.replace(/^ralph:/, 'loop:')
-    const data = typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data
+    const data = (typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data) as Record<string, unknown>
     if ('inPlace' in data) {
-      data.worktree = !data.inPlace
+      data.worktree = !(data.inPlace as boolean)
       delete data.inPlace
     }
-    await kvService.set(projectId, newKey, data)
-    await kvService.delete(projectId, entry.key)
+    kvService.set(projectId, newKey, data)
+    kvService.delete(projectId, entry.key)
   }
   
-  const oldSessions = await kvService.listByPrefix(projectId, 'ralph-session:')
+  const oldSessions = kvService.listByPrefix(projectId, 'ralph-session:')
   for (const entry of oldSessions) {
     const newKey = entry.key.replace(/^ralph-session:/, 'loop-session:')
-    await kvService.set(projectId, newKey, entry.data)
-    await kvService.delete(projectId, entry.key)
+    kvService.set(projectId, newKey, entry.data)
+    kvService.delete(projectId, entry.key)
   }
   
   if (oldSessions.length > 0) {
-    logger.log(`Migrated ${oldSessions.length} ralph-session: KV entries to loop-session: prefix`)
+    logger.log(`Migrated ${String(oldSessions.length)} ralph-session: KV entries to loop-session: prefix`)
   }
 }
 
@@ -36,6 +36,17 @@ export const STALL_TIMEOUT_MS = 60_000
 export const MAX_CONSECUTIVE_STALLS = 5
 export const DEFAULT_MIN_AUDITS = 1
 export const RECENT_MESSAGES_COUNT = 5
+export const DEFAULT_COMPLETION_SIGNAL = 'ALL_PHASES_COMPLETE'
+
+export function buildCompletionSignalInstructions(signal: string): string {
+  return `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${signal}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
+}
+
+export const LOOP_PERMISSION_RULESET = [
+  { permission: '*', pattern: '*', action: 'allow' as const },
+  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
+  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
+]
 
 export interface LoopState {
   active: boolean
@@ -45,7 +56,7 @@ export interface LoopState {
   worktreeBranch?: string
   iteration: number
   maxIterations: number
-  completionPromise: string | null
+  completionSignal: string | null
   startedAt: string
   prompt?: string
   phase: 'coding' | 'auditing'
@@ -69,7 +80,7 @@ export interface LoopService {
   registerSession(sessionId: string, worktreeName: string): void
   resolveWorktreeName(sessionId: string): string | null
   unregisterSession(sessionId: string): void
-  checkCompletionPromise(text: string, promise: string): boolean
+  checkCompletionSignal(text: string, promise: string): boolean
   buildContinuationPrompt(state: LoopState, auditFindings?: string): string
   buildAuditPrompt(state: LoopState): string
   listActive(): LoopState[]
@@ -98,7 +109,7 @@ export function createLoopService(
 
   function getActiveState(name: string): LoopState | null {
     const state = kvService.get<LoopState>(projectId, stateKey(name))
-    if (!state || !state.active) {
+    if (!state?.active) {
       return null
     }
     return state
@@ -124,27 +135,23 @@ export function createLoopService(
     kvService.delete(projectId, `loop-session:${sessionId}`)
   }
 
-  function checkCompletionPromise(text: string, promise: string): boolean {
-    return text.includes(promise)
+  function checkCompletionSignal(text: string, completionSignal: string): boolean {
+    return text.toLowerCase().includes(completionSignal.toLowerCase())
   }
 
+
   function redactCompletionSignal(text: string, promise: string): string {
-    let result = text
-    const inner = promise.replace(/<\/?promise>/g, '').trim()
-    if (inner) {
-      result = result.replaceAll(inner, '[SIGNAL_REDACTED]')
-    }
-    result = result.replaceAll(promise, '[SIGNAL_REDACTED]')
-    return result
+    const regex = new RegExp(promise.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    return text.replace(regex, '[SIGNAL_REDACTED]')
   }
 
   function buildContinuationPrompt(state: LoopState, auditFindings?: string): string {
-    let systemLine = `Loop iteration ${state.iteration ?? 0}`
+    let systemLine = `Loop iteration ${String(state.iteration)}`
 
-    if (state.completionPromise) {
-      systemLine += ` | To stop: output ${state.completionPromise} (ONLY after all verification commands pass AND all phase acceptance criteria are met)`
-    } else if ((state.maxIterations ?? 0) > 0) {
-      systemLine += ` / ${state.maxIterations}`
+    if (state.completionSignal) {
+      systemLine += ` | To stop: output ${state.completionSignal} (ONLY after all verification commands pass AND all phase acceptance criteria are met)`
+    } else if (state.maxIterations > 0) {
+      systemLine += ` / ${String(state.maxIterations)}`
     } else {
       systemLine += ` | No completion promise set - loop runs until cancelled`
     }
@@ -152,10 +159,10 @@ export function createLoopService(
     let prompt = `[${systemLine}]\n\n${state.prompt ?? ''}`
 
     if (auditFindings) {
-      const cleanedFindings = state.completionPromise
-        ? redactCompletionSignal(auditFindings, state.completionPromise)
+      const cleanedFindings = state.completionSignal
+        ? redactCompletionSignal(auditFindings, state.completionSignal)
         : auditFindings
-      const completionInstruction = state.completionPromise
+      const completionInstruction = state.completionSignal
         ? '\n\nAfter fixing all issues, output the completion signal.'
         : ''
       prompt += `\n\n---\nThe code auditor reviewed your changes. You MUST address all bugs and convention violations below — do not dismiss findings as unrelated to the task. Fix them directly without creating a plan or asking for approval.\n\n${cleanedFindings}${completionInstruction}`
@@ -164,20 +171,20 @@ export function createLoopService(
     const outstandingFindings = getOutstandingFindings(state.worktreeBranch)
     if (outstandingFindings.length > 0) {
       const findingKeys = outstandingFindings.map((f) => `- \`${f.key}\``).join('\n')
-      prompt += `\n\n---\n⚠️ Outstanding Review Findings (${outstandingFindings.length})\n\nThese review findings are blocking loop completion. Fix these issues so they pass the next audit review.\n\n${findingKeys}`
+      prompt += `\n\n---\n⚠️ Outstanding Review Findings (${String(outstandingFindings.length)})\n\nThese review findings are blocking loop completion. Fix these issues so they pass the next audit review.\n\n${findingKeys}`
     }
 
     return prompt
   }
 
   function buildAuditPrompt(state: LoopState): string {
-    const taskSummary = (state.prompt?.length ?? 0) > 200
-      ? `${state.prompt?.substring(0, 197)}...`
+    const taskSummary = state.prompt && state.prompt.length > 200
+      ? `${state.prompt.substring(0, 197)}...`
       : (state.prompt ?? '')
 
     const branchInfo = state.worktreeBranch ? ` (branch: ${state.worktreeBranch})` : ''
     return [
-      `Post-iteration ${state.iteration ?? 0} code review${branchInfo}.`,
+      `Post-iteration ${String(state.iteration)} code review${branchInfo}.`,
       '',
       `Task context: ${taskSummary}`,
       '',
@@ -194,15 +201,19 @@ export function createLoopService(
   function listActive(): LoopState[] {
     const entries = kvService.listByPrefix(projectId, 'loop:')
     return entries
-      .map((entry) => entry.data as LoopState)
-      .filter((state): state is LoopState => state !== null && state.active)
+      .map((entry) => entry.data)
+      .filter((data): data is LoopState =>
+        data !== null && typeof data === 'object' && 'active' in data && (data as LoopState).active
+      )
   }
 
   function listRecent(): LoopState[] {
     const entries = kvService.listByPrefix(projectId, 'loop:')
     return entries
-      .map((entry) => entry.data as LoopState)
-      .filter((state): state is LoopState => state !== null && !state.active)
+      .map((entry) => entry.data)
+      .filter((data): data is LoopState =>
+        data !== null && typeof data === 'object' && 'active' in data && !(data as LoopState).active
+      )
   }
 
   function findByWorktreeName(name: string): LoopState | null {
@@ -242,7 +253,7 @@ export function createLoopService(
       }
       setState(state.worktreeName, updated)
     }
-    logger.log(`Loop: terminated ${active.length} active loop(s)`)
+    logger.log(`Loop: terminated ${String(active.length)} active loop(s)`)
   }
 
   function reconcileStale(): number {
@@ -254,7 +265,7 @@ export function createLoopService(
         completedAt: new Date().toISOString(),
         terminationReason: 'shutdown',
       })
-      logger.log(`Reconciled stale active loop: ${state.worktreeName} (was at iteration ${state.iteration})`)
+      logger.log(`Reconciled stale active loop: ${state.worktreeName} (was at iteration ${String(state.iteration)})`)
     }
     return active.length
   }
@@ -264,7 +275,7 @@ export function createLoopService(
     if (!branch) return findings
     return findings.filter((f) => {
       const data = f.data as Record<string, unknown> | null
-      return data && data.branch === branch
+      return data?.branch === branch
     })
   }
 
@@ -280,7 +291,7 @@ export function createLoopService(
     registerSession,
     resolveWorktreeName,
     unregisterSession,
-    checkCompletionPromise,
+    checkCompletionSignal,
     buildContinuationPrompt,
     buildAuditPrompt,
     listActive,
@@ -297,7 +308,7 @@ export function createLoopService(
 }
 
 export interface LoopSessionOutput {
-  messages: Array<{ text: string; cost: number; tokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number } }>
+  messages: { text: string; cost: number; tokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number } }[]
   totalCost: number
   totalTokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
   fileChanges: { additions: number; deletions: number; files: number } | null
@@ -320,18 +331,19 @@ export async function fetchSessionOutput(
       directory,
     })
 
-    const messages = (messagesResult.data ?? []) as Array<{
+    const messages = (messagesResult.data ?? []) as {
       info: { role: string; cost?: number; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }
-      parts: Array<{ type: string; text?: string }>
-    }>
+      parts: { type: string; text?: string }[]
+    }[]
 
     const assistantMessages = messages.filter((m) => m.info.role === 'assistant')
     const lastThree = assistantMessages.slice(-RECENT_MESSAGES_COUNT)
 
     const extractedMessages = lastThree.map((msg) => {
       const text = msg.parts
-        .filter((p) => p.type === 'text' && typeof p.text === 'string')
-        .map((p) => p.text as string)
+        .filter((p) => p.type === 'text' && p.text !== undefined)
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        .map((p) => p.text!)
         .join('\n')
       const cost = msg.info.cost ?? 0
       const tokens = msg.info.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
@@ -342,8 +354,8 @@ export async function fetchSessionOutput(
           input: tokens.input,
           output: tokens.output,
           reasoning: tokens.reasoning,
-          cacheRead: tokens.cache?.read ?? 0,
-          cacheWrite: tokens.cache?.write ?? 0,
+          cacheRead: tokens.cache.read,
+          cacheWrite: tokens.cache.write,
         },
       }
     })
@@ -359,11 +371,11 @@ export async function fetchSessionOutput(
       totalCost += msg.info.cost ?? 0
       const tokens = msg.info.tokens
       if (tokens) {
-        totalInputTokens += tokens.input ?? 0
-        totalOutputTokens += tokens.output ?? 0
-        totalReasoningTokens += tokens.reasoning ?? 0
-        totalCacheRead += tokens.cache?.read ?? 0
-        totalCacheWrite += tokens.cache?.write ?? 0
+        totalInputTokens += tokens.input
+        totalOutputTokens += tokens.output
+        totalReasoningTokens += tokens.reasoning
+        totalCacheRead += tokens.cache.read
+        totalCacheWrite += tokens.cache.write
       }
     }
 

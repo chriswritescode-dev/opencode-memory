@@ -1,6 +1,7 @@
 import type { DockerService } from './docker'
 import type { Logger } from '../types'
 import { resolve } from 'path'
+import { spawnSync } from 'child_process'
 
 export interface SandboxManagerConfig {
   image: string
@@ -12,9 +13,9 @@ export interface ActiveSandbox {
   startedAt: string
 }
 
-interface SandboxManager {
+export interface SandboxManager {
   docker: DockerService
-  start(worktreeName: string, projectDir: string): Promise<{ containerName: string }>
+  start(worktreeName: string, projectDir: string, startedAt?: string): Promise<{ containerName: string }>
   stop(worktreeName: string): Promise<void>
   getActive(worktreeName: string): ActiveSandbox | null
   isActive(worktreeName: string): boolean
@@ -22,14 +23,34 @@ interface SandboxManager {
   restore(worktreeName: string, projectDir: string, startedAt: string): Promise<void>
 }
 
-const activeSandboxes = new Map<string, ActiveSandbox>()
-
 export function createSandboxManager(
   docker: DockerService,
   config: SandboxManagerConfig,
   logger: Logger,
 ): SandboxManager {
-  async function start(worktreeName: string, projectDir: string): Promise<{ containerName: string }> {
+  const activeSandboxes = new Map<string, ActiveSandbox>()
+
+  function detectGitMount(projectDir: string): string[] {
+    try {
+      const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
+        cwd: projectDir,
+        encoding: 'utf-8',
+      })
+      if (result.status !== 0 || !result.stdout) return []
+      
+      const gitCommonDir = resolve(projectDir, result.stdout.trim())
+      
+      // If the git dir is already inside the project dir being mounted, no extra mount needed
+      if (gitCommonDir.startsWith(projectDir + '/')) return []
+      
+      return [`${gitCommonDir}:${gitCommonDir}:ro`]
+    } catch {
+      logger.log(`[sandbox] could not detect git common dir for ${projectDir}, skipping extra mount`)
+      return []
+    }
+  }
+
+  async function start(worktreeName: string, projectDir: string, startedAt?: string): Promise<{ containerName: string }> {
     const dockerAvailable = await docker.checkDocker()
     if (!dockerAvailable) {
       throw new Error('Docker is not available. Please ensure Docker is running.')
@@ -52,13 +73,17 @@ export function createSandboxManager(
     }
 
     const absoluteProjectDir = resolve(projectDir)
+    const extraMounts = detectGitMount(absoluteProjectDir)
+    if (extraMounts.length > 0) {
+      logger.log(`Sandbox: mounting git common dir: ${extraMounts[0]}`)
+    }
     logger.log(`Creating sandbox container ${containerName} for ${absoluteProjectDir}`)
-    await docker.createContainer(containerName, absoluteProjectDir, config.image)
+    await docker.createContainer(containerName, absoluteProjectDir, config.image, extraMounts)
 
     const active: ActiveSandbox = {
       containerName,
       projectDir: absoluteProjectDir,
-      startedAt: new Date().toISOString(),
+      startedAt: startedAt ?? new Date().toISOString(),
     }
 
     activeSandboxes.set(worktreeName, active)
@@ -128,42 +153,12 @@ export function createSandboxManager(
   async function restore(worktreeName: string, projectDir: string, startedAt: string): Promise<void> {
     const containerName = docker.containerName(worktreeName)
     const running = await docker.isRunning(containerName)
-
     if (running) {
       logger.log(`Sandbox container ${containerName} already running, repopulating map`)
-      const active: ActiveSandbox = {
-        containerName,
-        projectDir: resolve(projectDir),
-        startedAt,
-      }
-      activeSandboxes.set(worktreeName, active)
+      activeSandboxes.set(worktreeName, { containerName, projectDir: resolve(projectDir), startedAt })
     } else {
       logger.log(`Sandbox container ${containerName} not running, starting new container`)
-      const dockerAvailable = await docker.checkDocker()
-      if (!dockerAvailable) {
-        throw new Error('Docker is not available. Please ensure Docker is running.')
-      }
-
-      const imageExists = await docker.imageExists(config.image)
-      if (!imageExists) {
-        throw new Error(
-          `Docker image "${config.image}" not found. Build it first:\n` +
-          `  docker build -t ${config.image} container/`
-        )
-      }
-
-      const absoluteProjectDir = resolve(projectDir)
-      logger.log(`Creating sandbox container ${containerName} for ${absoluteProjectDir}`)
-      await docker.createContainer(containerName, absoluteProjectDir, config.image)
-
-      const active: ActiveSandbox = {
-        containerName,
-        projectDir: absoluteProjectDir,
-        startedAt,
-      }
-
-      activeSandboxes.set(worktreeName, active)
-      logger.log(`Sandbox container ${containerName} started`)
+      await start(worktreeName, projectDir, startedAt)
     }
   }
 
