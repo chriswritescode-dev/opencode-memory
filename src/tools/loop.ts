@@ -1,7 +1,6 @@
 import { tool } from '@opencode-ai/plugin'
 import { execSync, spawnSync } from 'child_process'
-import { existsSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync } from 'fs'
 import { resolve } from 'path'
 import type { ToolContext } from './types'
 import { withDimensionWarning } from './types'
@@ -9,10 +8,10 @@ import { parseModelString, retryWithModelFallback } from '../utils/model-fallbac
 import { slugify } from '../utils/logger'
 import { findPartialMatch } from '../utils/partial-match'
 import { formatSessionOutput, formatAuditResult } from '../utils/loop-format'
-import { fetchSessionOutput, MAX_RETRIES, type LoopState, type LoopSessionOutput } from '../services/loop'
+import { fetchSessionOutput, MAX_RETRIES, LOOP_PERMISSION_RULESET, type LoopState, type LoopSessionOutput } from '../services/loop'
 
 const z = tool.schema
-const DEFAULT_PLAN_COMPLETION_PROMISE = '<promise>ALL_PHASES_COMPLETE</promise>'
+const DEFAULT_PLAN_COMPLETION_PROMISE = 'ALL_PHASES_COMPLETE'
 
 interface LoopSetupOptions {
   prompt: string
@@ -56,6 +55,7 @@ async function setupLoop(
     const createResult = await v2.session.create({
       title: options.sessionTitle,
       directory: projectDir,
+      permission: LOOP_PERMISSION_RULESET,
     })
 
     if (createResult.error || !createResult.data) {
@@ -85,6 +85,7 @@ async function setupLoop(
     const createResult = await v2.session.create({
       title: options.sessionTitle,
       directory: worktreeInfo.directory,
+      permission: LOOP_PERMISSION_RULESET,
     })
 
     if (createResult.error || !createResult.data) {
@@ -102,21 +103,6 @@ async function setupLoop(
       directory: worktreeInfo.directory,
       branch: worktreeInfo.branch,
       worktree: true,
-    }
-  }
-
-  if (loopContext.worktree) {
-    try {
-      const loopConfig = JSON.stringify({
-        permission: {
-          bash: { '*': 'allow', 'git push *': 'deny' },
-          external_directory: { '*': 'deny' },
-        },
-      }, null, 2)
-      writeFileSync(join(loopContext.directory, 'opencode.jsonc'), loopConfig)
-      logger.log(`loop: wrote loop opencode.jsonc to ${loopContext.directory}`)
-    } catch (err) {
-      logger.error(`loop: failed to write opencode.jsonc`, err)
     }
   }
 
@@ -390,6 +376,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           const createParams = {
             title: stoppedState.worktreeName!,
             directory: stoppedState.worktreeDir!,
+            permission: LOOP_PERMISSION_RULESET,
           }
 
           const createResult = await v2.session.create(createParams)

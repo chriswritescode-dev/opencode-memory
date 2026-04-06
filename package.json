@@ -1,6 +1,6 @@
 {
   "name": "@opencode-manager/memory",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "type": "module",
   "oc-plugin": [
     "server",

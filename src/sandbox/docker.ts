@@ -17,7 +17,7 @@ export interface DockerService {
   checkDocker(): Promise<boolean>
   imageExists(image: string): Promise<boolean>
   buildImage(dockerfilePath: string, tag: string): Promise<void>
-  createContainer(name: string, projectDir: string, image: string): Promise<void>
+  createContainer(name: string, projectDir: string, image: string, extraMounts?: string[]): Promise<void>
   removeContainer(name: string): Promise<void>
   exec(name: string, command: string, opts?: DockerExecOpts): Promise<DockerExecResult>
   execPipe(name: string, command: string, stdin: string, opts?: { timeout?: number; abort?: AbortSignal }): Promise<DockerExecResult>
@@ -74,7 +74,7 @@ export function createDockerService(logger: Logger): DockerService {
     })
   }
 
-  async function createContainer(name: string, projectDir: string, image: string): Promise<void> {
+  async function createContainer(name: string, projectDir: string, image: string, extraMounts?: string[]): Promise<void> {
     const args = [
       'run',
       '-d',
@@ -82,12 +82,15 @@ export function createDockerService(logger: Logger): DockerService {
       name,
       '-v',
       `${projectDir}:/workspace`,
-      '-w',
-      '/workspace',
-      image,
-      'sleep',
-      'infinity',
     ]
+
+    if (extraMounts) {
+      for (const mount of extraMounts) {
+        args.push('-v', mount)
+      }
+    }
+
+    args.push('-w', '/workspace', image, 'sleep', 'infinity')
 
     const result = await execPromise('docker', args, { timeout: 30000 })
     if (result.exitCode !== 0) {
@@ -214,8 +217,10 @@ export function createDockerService(logger: Logger): DockerService {
     args: string[],
     options?: { timeout?: number; streaming?: boolean; abort?: AbortSignal },
   ): Promise<DockerExecResult> {
-    return new Promise((resolve, reject) => {
-      const timeout = options?.timeout ?? DEFAULT_TIMEOUT
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT
+    const cmdPreview = args.slice(-1)[0]?.slice(0, 80) ?? ''
+
+    const inner = new Promise<DockerExecResult>((resolve) => {
       const child = spawn(command, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -223,14 +228,21 @@ export function createDockerService(logger: Logger): DockerService {
       let stdout = ''
       let stderr = ''
       let timedOut = false
-      const cmdPreview = args.slice(-1)[0]?.slice(0, 80) ?? ''
+      let settled = false
+
+      function settle(result: DockerExecResult): void {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutId)
+        resolve(result)
+      }
 
       const timeoutId = setTimeout(() => {
         timedOut = true
         logger.log(`[docker] timeout (${timeout}ms) for: ${cmdPreview}`)
         child.kill('SIGTERM')
         setTimeout(() => {
-          if (child.exitCode === null) {
+          if (!settled) {
             logger.log(`[docker] SIGKILL after SIGTERM for: ${cmdPreview}`)
             child.kill('SIGKILL')
           }
@@ -239,13 +251,10 @@ export function createDockerService(logger: Logger): DockerService {
 
       if (options?.abort) {
         const onAbort = () => {
-          clearTimeout(timeoutId)
           logger.log(`[docker] abort signal for: ${cmdPreview}`)
           child.kill('SIGTERM')
           setTimeout(() => {
-            if (child.exitCode === null) {
-              child.kill('SIGKILL')
-            }
+            if (!settled) child.kill('SIGKILL')
           }, 3000)
         }
         if (options.abort.aborted) {
@@ -264,11 +273,10 @@ export function createDockerService(logger: Logger): DockerService {
       })
 
       child.on('close', (code) => {
-        clearTimeout(timeoutId)
         if (timedOut) {
           logger.log(`[docker] close after timeout, code=${code} for: ${cmdPreview}`)
         }
-        resolve({
+        settle({
           stdout,
           stderr,
           exitCode: timedOut ? 124 : (code ?? 1),
@@ -276,11 +284,24 @@ export function createDockerService(logger: Logger): DockerService {
       })
 
       child.on('error', (err) => {
-        clearTimeout(timeoutId)
         logger.log(`[docker] spawn error: ${err.message} for: ${cmdPreview}`)
-        reject(err)
+        settle({
+          stdout,
+          stderr: stderr + err.message,
+          exitCode: 1,
+        })
       })
     })
+
+    const hardDeadline = timeout + 10_000
+    const deadlinePromise = new Promise<DockerExecResult>((resolve) => {
+      setTimeout(() => {
+        logger.log(`[docker] hard deadline (${hardDeadline}ms) hit for: ${cmdPreview}`)
+        resolve({ stdout: '', stderr: `Command exceeded hard deadline of ${hardDeadline}ms`, exitCode: 124 })
+      }, hardDeadline)
+    })
+
+    return Promise.race([inner, deadlinePromise])
   }
 
   return {

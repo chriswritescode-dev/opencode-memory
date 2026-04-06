@@ -1,6 +1,7 @@
 import type { DockerService } from './docker'
 import type { Logger } from '../types'
 import { resolve } from 'path'
+import { spawnSync } from 'child_process'
 
 export interface SandboxManagerConfig {
   image: string
@@ -29,6 +30,26 @@ export function createSandboxManager(
   config: SandboxManagerConfig,
   logger: Logger,
 ): SandboxManager {
+  function detectGitMount(projectDir: string): string[] {
+    try {
+      const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
+        cwd: projectDir,
+        encoding: 'utf-8',
+      })
+      if (result.status !== 0 || !result.stdout) return []
+      
+      const gitCommonDir = resolve(projectDir, result.stdout.trim())
+      
+      // If the git dir is already inside the project dir being mounted, no extra mount needed
+      if (gitCommonDir.startsWith(projectDir + '/')) return []
+      
+      return [`${gitCommonDir}:${gitCommonDir}:ro`]
+    } catch {
+      logger.log(`[sandbox] could not detect git common dir for ${projectDir}, skipping extra mount`)
+      return []
+    }
+  }
+
   async function start(worktreeName: string, projectDir: string): Promise<{ containerName: string }> {
     const dockerAvailable = await docker.checkDocker()
     if (!dockerAvailable) {
@@ -52,8 +73,12 @@ export function createSandboxManager(
     }
 
     const absoluteProjectDir = resolve(projectDir)
+    const extraMounts = detectGitMount(absoluteProjectDir)
+    if (extraMounts.length > 0) {
+      logger.log(`Sandbox: mounting git common dir: ${extraMounts[0]}`)
+    }
     logger.log(`Creating sandbox container ${containerName} for ${absoluteProjectDir}`)
-    await docker.createContainer(containerName, absoluteProjectDir, config.image)
+    await docker.createContainer(containerName, absoluteProjectDir, config.image, extraMounts)
 
     const active: ActiveSandbox = {
       containerName,
@@ -153,8 +178,12 @@ export function createSandboxManager(
       }
 
       const absoluteProjectDir = resolve(projectDir)
+      const extraMounts = detectGitMount(absoluteProjectDir)
+      if (extraMounts.length > 0) {
+        logger.log(`Sandbox: mounting git common dir: ${extraMounts[0]}`)
+      }
       logger.log(`Creating sandbox container ${containerName} for ${absoluteProjectDir}`)
-      await docker.createContainer(containerName, absoluteProjectDir, config.image)
+      await docker.createContainer(containerName, absoluteProjectDir, config.image, extraMounts)
 
       const active: ActiveSandbox = {
         containerName,

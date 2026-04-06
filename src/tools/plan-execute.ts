@@ -1,7 +1,6 @@
 import { tool } from '@opencode-ai/plugin'
 import type { ToolContext } from './types'
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
-import { stripPromiseTags } from '../utils/strip-promise-tags'
 
 const z = tool.schema
 
@@ -52,10 +51,7 @@ export function createPlanExecuteTools(ctx: ToolContext): Record<string, ReturnT
           return `Switching to code agent for execution.\n\nTitle: ${sessionTitle}\nModel: ${modelInfo}\nAgent: code`
         }
 
-        const { cleaned: planText, stripped } = stripPromiseTags(args.plan)
-        if (stripped) {
-          logger.log(`memory-plan-execute: stripped <promise> tags from plan text`)
-        }
+        const planText = args.plan
 
         const createResult = await v2.session.create({
           title: sessionTitle,

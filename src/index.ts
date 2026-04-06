@@ -303,18 +303,19 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         await toolExecuteAfterHook!(input, output)
       },
       'permission.ask': async (input, output) => {
-        const req = input as unknown as { sessionID: string; permission: string; patterns: string[] }
-        const worktreeName = loopService.resolveWorktreeName(req.sessionID)
+        const worktreeName = loopService.resolveWorktreeName(input.sessionID)
         const state = worktreeName ? loopService.getActiveState(worktreeName) : null
         if (!state?.active) return
 
-        if (req.patterns.some((p) => p.startsWith('git push'))) {
-          logger.log(`Loop: denied git push for session ${req.sessionID}`)
+        const patterns = Array.isArray(input.pattern) ? input.pattern : (input.pattern ? [input.pattern] : [])
+
+        if (patterns.some((p) => p.startsWith('git push'))) {
+          logger.log(`Loop: denied git push for session ${input.sessionID}`)
           output.status = 'deny'
           return
         }
 
-        logger.log(`Loop: auto-allowing ${req.permission} [${req.patterns.join(', ')}] for session ${req.sessionID}`)
+        logger.log(`Loop: auto-allowing ${input.type} [${patterns.join(', ')}] for session ${input.sessionID}`)
         output.status = 'allow'
       },
       'experimental.session.compacting': async (input, output) => {

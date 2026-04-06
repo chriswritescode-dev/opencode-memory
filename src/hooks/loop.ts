@@ -1,11 +1,11 @@
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { OpencodeClient } from '@opencode-ai/sdk/v2'
 import type { LoopService, LoopState } from '../services/loop'
-import { MAX_RETRIES, MAX_CONSECUTIVE_STALLS } from '../services/loop'
+import { MAX_RETRIES, MAX_CONSECUTIVE_STALLS, LOOP_PERMISSION_RULESET } from '../services/loop'
 import type { Logger, PluginConfig, LoopConfig } from '../types'
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
 import { execSync, spawnSync } from 'child_process'
-import { resolve, join } from 'path'
+import { resolve } from 'path'
 import type { createSandboxManager } from '../sandbox/manager'
 
 export interface LoopEventHandler {
@@ -54,15 +54,6 @@ export function createLoopEventHandler(
     let cleaned = false
 
     try {
-      // Remove the opencode.jsonc file we wrote for permissions - don't commit it
-      try {
-        const { unlinkSync } = await import('fs')
-        unlinkSync(join(state.worktreeDir, 'opencode.jsonc'))
-        logger.log(`Loop: removed opencode.jsonc before commit`)
-      } catch {
-        // File may not exist, ignore
-      }
-
       const addResult = spawnSync('git', ['add', '-A'], { cwd: state.worktreeDir, encoding: 'utf-8' })
       if (addResult.status !== 0) {
         throw new Error(addResult.stderr || 'git add failed')
@@ -347,6 +338,7 @@ export function createLoopEventHandler(
     const createParams = {
       title: state.worktreeName,
       directory: state.worktreeDir,
+      permission: LOOP_PERMISSION_RULESET,
     }
 
     const createResult = await v2Client.session.create(createParams)

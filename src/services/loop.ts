@@ -37,6 +37,12 @@ export const MAX_CONSECUTIVE_STALLS = 5
 export const DEFAULT_MIN_AUDITS = 1
 export const RECENT_MESSAGES_COUNT = 5
 
+export const LOOP_PERMISSION_RULESET = [
+  { permission: '*', pattern: '*', action: 'allow' as const },
+  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
+  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
+]
+
 export interface LoopState {
   active: boolean
   sessionId: string
@@ -129,13 +135,7 @@ export function createLoopService(
   }
 
   function redactCompletionSignal(text: string, promise: string): string {
-    let result = text
-    const inner = promise.replace(/<\/?promise>/g, '').trim()
-    if (inner) {
-      result = result.replaceAll(inner, '[SIGNAL_REDACTED]')
-    }
-    result = result.replaceAll(promise, '[SIGNAL_REDACTED]')
-    return result
+    return text.replaceAll(promise, '[SIGNAL_REDACTED]')
   }
 
   function buildContinuationPrompt(state: LoopState, auditFindings?: string): string {
