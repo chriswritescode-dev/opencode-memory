@@ -20,7 +20,6 @@ import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, a
 import { createSandboxToolBeforeHook, createSandboxToolAfterHook } from './hooks/sandbox-tools'
 import type { DimensionMismatchState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
-import { isSandboxEnabled } from './sandbox/context'
 
 
 export function createMemoryPlugin(config: PluginConfig): Plugin {
@@ -86,7 +85,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     }
 
     let sandboxManager: ReturnType<typeof createSandboxManager> | null = null
-    if (isSandboxEnabled(config, null)) {
+    if (config.sandbox?.mode === 'docker') {
       const dockerService = createDockerService(logger)
       try {
         sandboxManager = createSandboxManager(dockerService, {

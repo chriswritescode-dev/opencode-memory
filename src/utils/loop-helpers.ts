@@ -18,11 +18,6 @@ export function formatDuration(seconds: number): string {
   return minutes > 0 ? `${minutes}m ${secs}s` : `${secs}s`
 }
 
-export function formatElapsed(startedAt: string): string {
-  const elapsed = Math.round((Date.now() - new Date(startedAt).getTime()) / 1000)
-  return formatDuration(elapsed)
-}
-
 export function computeElapsedSeconds(startedAt?: string, endedAt?: string): number {
   if (!startedAt) return 0
   const start = new Date(startedAt).getTime()

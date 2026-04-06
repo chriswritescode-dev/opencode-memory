@@ -107,23 +107,28 @@ describe('LoopService', () => {
   })
 
   test('checkCompletionSignal matches exact phrase', () => {
-    const text = 'Some response text <promise>ALL_PHASES_COMPLETE</promise> more text'
-    expect(loopService.checkCompletionSignal(text, '<promise>ALL_PHASES_COMPLETE</promise>')).toBe(true)
+    const text = 'Some response text ALL_PHASES_COMPLETE more text'
+    expect(loopService.checkCompletionSignal(text, 'ALL_PHASES_COMPLETE')).toBe(true)
   })
 
   test('checkCompletionSignal returns false when phrase not present', () => {
     const text = 'Some response text without the phrase'
-    expect(loopService.checkCompletionSignal(text, '<promise>ALL_PHASES_COMPLETE</promise>')).toBe(false)
+    expect(loopService.checkCompletionSignal(text, 'ALL_PHASES_COMPLETE')).toBe(false)
   })
 
   test('checkCompletionSignal returns false when phrase does not match', () => {
-    const text = 'Some response <promise>NOT_COMPLETE</promise> text'
-    expect(loopService.checkCompletionSignal(text, '<promise>ALL_PHASES_COMPLETE</promise>')).toBe(false)
+    const text = 'Some response NOT_COMPLETE text'
+    expect(loopService.checkCompletionSignal(text, 'ALL_PHASES_COMPLETE')).toBe(false)
   })
 
   test('checkCompletionSignal requires exact match', () => {
-    const text = 'Response <promise>ALL_PHASES_COMPLETE</promise> text'
-    expect(loopService.checkCompletionSignal(text, '<promise>NOT_COMPLETE</promise>')).toBe(false)
+    const text = 'Response ALL_PHASES_COMPLETE text'
+    expect(loopService.checkCompletionSignal(text, 'NOT_COMPLETE')).toBe(false)
+  })
+
+  test('checkCompletionSignal is case-insensitive', () => {
+    const text = 'Some response all_phases_complete more text'
+    expect(loopService.checkCompletionSignal(text, 'ALL_PHASES_COMPLETE')).toBe(true)
   })
 
   test('buildContinuationPrompt includes iteration number', () => {

@@ -8,12 +8,11 @@ import { parseModelString, retryWithModelFallback } from '../utils/model-fallbac
 import { slugify } from '../utils/logger'
 import { findPartialMatch } from '../utils/partial-match'
 import { formatSessionOutput, formatAuditResult } from '../utils/loop-format'
-import { fetchSessionOutput, MAX_RETRIES, LOOP_PERMISSION_RULESET, buildCompletionSignalInstructions, type LoopState, type LoopSessionOutput } from '../services/loop'
+import { fetchSessionOutput, MAX_RETRIES, LOOP_PERMISSION_RULESET, buildCompletionSignalInstructions, DEFAULT_COMPLETION_SIGNAL, type LoopState, type LoopSessionOutput } from '../services/loop'
 import { isSandboxEnabled } from '../sandbox/context'
 import { formatDuration, computeElapsedSeconds } from '../utils/loop-helpers'
 
 const z = tool.schema
-const DEFAULT_COMPLETION_SIGNAL = 'ALL_PHASES_COMPLETE'
 
 interface LoopSetupOptions {
   prompt: string
@@ -392,7 +391,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
           loopService.deleteState(stoppedState.worktreeName!)
 
-          const restartSandbox = config.sandbox?.mode === 'docker' && !!ctx.sandboxManager
+          const restartSandbox = isSandboxEnabled(config, ctx.sandboxManager)
           if (restartSandbox) {
             try {
               const sbxResult = await ctx.sandboxManager!.start(stoppedState.worktreeName!, stoppedState.worktreeDir!)

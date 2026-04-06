@@ -135,16 +135,10 @@ export function createLoopService(
     kvService.delete(projectId, `loop-session:${sessionId}`)
   }
 
-  function checkCompletionSignal(text: string, promise: string): boolean {
-    // If promise already contains <promise> tags, use exact match; otherwise wrap with tags
-    const pattern = promise.includes('<promise>') ? escapeRegex(promise) : `<promise>${escapeRegex(promise)}</promise>`
-    const regex = new RegExp(pattern, 'i')
-    return regex.test(text)
+  function checkCompletionSignal(text: string, completionSignal: string): boolean {
+    return text.toLowerCase().includes(completionSignal.toLowerCase())
   }
 
-  function escapeRegex(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  }
 
   function redactCompletionSignal(text: string, promise: string): string {
     return text.replaceAll(promise, '[SIGNAL_REDACTED]')
