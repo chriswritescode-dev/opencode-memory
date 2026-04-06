@@ -75,7 +75,11 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     const kvService = createKvService(db, logger, config.defaultKvTtlMs)
 
     const loopService = createLoopService(kvService, projectId, logger, config.loop)
-    migrateRalphKeys(kvService, projectId, logger).catch(() => {})
+    try {
+      migrateRalphKeys(kvService, projectId, logger)
+    } catch (err) {
+      logger.error('Failed to migrate ralph: KV entries', err)
+    }
 
     const activeSandboxLoops = loopService.listActive().filter(s => s.sandbox && s.worktreeName)
 
