@@ -24,10 +24,82 @@ export interface SessionStats {
     updated: string
     durationMs: number
   } | null
-  lastAssistantMessage: {
-    text: string
-    parts: Array<{ type: string; text?: string }>
+  lastActivity: {
+    summary: string
+    toolCalls: Array<{ tool: string; title: string; status: string }>
   } | null
+}
+
+type PartAny = {
+  type: string
+  text?: string
+  tool?: string
+  description?: string
+  agent?: string
+  state?: {
+    status: string
+    title?: string
+    output?: string
+    error?: string
+    input?: Record<string, unknown>
+  }
+  error?: { message?: string; name?: string }
+}
+
+function extractActivity(
+  parts: PartAny[],
+): { summary: string; toolCalls: Array<{ tool: string; title: string; status: string }> } | null {
+  const toolCalls: Array<{ tool: string; title: string; status: string }> = []
+  const textLines: string[] = []
+  const toolLines: string[] = []
+  const subtaskLines: string[] = []
+  const reasoningLines: string[] = []
+
+  for (const p of parts) {
+    if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) {
+      textLines.push(p.text.trim())
+    } else if (p.type === 'tool' && p.tool && p.state) {
+      const s = p.state
+      const name = p.tool
+      const status = s.status
+      if (status === 'completed') {
+        const title = s.title ?? name
+        toolCalls.push({ tool: name, title, status: 'completed' })
+        toolLines.push(`[done] ${name}: ${title}`)
+      } else if (status === 'running') {
+        const title = s.title ?? name
+        toolCalls.push({ tool: name, title, status: 'running' })
+        toolLines.push(`[running] ${name}: ${title}`)
+      } else if (status === 'error') {
+        const msg = s.error ?? 'error'
+        toolCalls.push({ tool: name, title: msg, status: 'error' })
+        toolLines.push(`[error] ${name}: ${msg}`)
+      } else if (status === 'pending') {
+        toolCalls.push({ tool: name, title: name, status: 'pending' })
+        toolLines.push(`[pending] ${name}`)
+      }
+    } else if (p.type === 'subtask' && p.description) {
+      const agentLabel = p.agent ? `${p.agent}: ` : ''
+      subtaskLines.push(`-> ${agentLabel}${p.description}`)
+    } else if (p.type === 'reasoning' && typeof p.text === 'string' && p.text.trim()) {
+      reasoningLines.push(p.text.trim())
+    }
+  }
+
+  // Priority: text > tool titles > subtask > reasoning
+  let summary = ''
+  if (textLines.length > 0) {
+    summary = textLines.join('\n')
+  } else if (toolLines.length > 0) {
+    summary = toolLines.join('\n')
+  } else if (subtaskLines.length > 0) {
+    summary = subtaskLines.join('\n')
+  } else if (reasoningLines.length > 0) {
+    summary = reasoningLines.join('\n')
+  }
+
+  if (!summary && toolCalls.length === 0) return null
+  return { summary, toolCalls }
 }
 
 export async function fetchSessionStats(
@@ -56,20 +128,20 @@ export async function fetchSessionStats(
           cache: { read: number; write: number }
         }
       }
-      parts: Array<{ type: string; text?: string }>
+      parts: PartAny[]
     }>
 
     const assistantMessages = messages.filter((m) => m.info.role === 'assistant')
-    const lastAssistantMessage =
-      assistantMessages.length > 0
-        ? {
-            text: assistantMessages[assistantMessages.length - 1].parts
-              .filter((p) => p.type === 'text' && typeof p.text === 'string')
-              .map((p) => p.text as string)
-              .join('\n'),
-            parts: assistantMessages[assistantMessages.length - 1].parts,
-          }
-        : null
+
+    // Walk backwards through the last 3 assistant messages to find meaningful activity
+    let lastActivity: { summary: string; toolCalls: Array<{ tool: string; title: string; status: string }> } | null = null
+    for (let i = assistantMessages.length - 1; i >= Math.max(0, assistantMessages.length - 3); i--) {
+      const result = extractActivity(assistantMessages[i].parts)
+      if (result) {
+        lastActivity = result
+        break
+      }
+    }
 
     let totalInputTokens = 0
     let totalOutputTokens = 0
@@ -140,7 +212,7 @@ export async function fetchSessionStats(
       },
       fileChanges,
       timing,
-      lastAssistantMessage,
+      lastActivity,
     }
   } catch {
     return null

@@ -400,14 +400,14 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: 
         </box>
       </Show>
 
-      <Show when={stats()?.lastAssistantMessage?.text}>
+      <Show when={stats()?.lastActivity?.summary}>
         <box flexDirection="column" paddingTop={1} flexGrow={1} flexShrink={1}>
           <box flexShrink={0}>
             <text fg={theme().text}><b>Latest Output</b></text>
           </box>
           <scrollbox maxHeight={12} borderStyle="rounded" borderColor={theme().border} paddingX={1}>
             <text fg={theme().textMuted} wrapMode="word">
-              {truncate(stats()!.lastAssistantMessage!.text, 500)}
+              {truncate(stats()!.lastActivity!.summary, 500)}
             </text>
           </scrollbox>
         </box>
