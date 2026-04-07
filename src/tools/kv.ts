@@ -66,7 +66,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
     }),
 
     'memory-kv-list': tool({
-      description: 'List all active key-value pairs for the current project. Optionally filter by key prefix.',
+      description: 'Lists all active key-value pairs when called with no arguments. Optionally filter by key prefix.',
       args: {
         prefix: z.string().optional().describe('Filter entries by key prefix (e.g. "review-finding:")'),
       },

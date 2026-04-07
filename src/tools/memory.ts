@@ -19,7 +19,7 @@ export function createMemoryTools(ctx: ToolContext): Record<string, ReturnType<t
 
   return {
     'memory-read': tool({
-      description: 'Search and retrieve project memories',
+      description: 'Lists recent project memories when called with no arguments. Pass a query for semantic search.',
       args: {
         query: z.string().optional().describe('Semantic search query'),
         scope: scopeEnum.optional().describe('Filter by scope'),

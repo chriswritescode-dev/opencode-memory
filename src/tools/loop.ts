@@ -272,7 +272,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
     }),
 
     'memory-loop-cancel': tool({
-      description: 'Cancel an active memory loop and optionally clean up the worktree.',
+      description: 'Cancels the only active memory loop when called with no arguments. Pass a name to cancel a specific loop.',
       args: {
         name: z.string().optional().describe('Worktree name of the memory loop to cancel'),
       },
@@ -331,11 +331,11 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
     }),
 
     'memory-loop-status': tool({
-      description: 'Check the status of memory loops. With no arguments, lists all active loops for the current project. Pass a worktree name for detailed status of a specific loop. Use restart to resume an inactive loop. Use restart with force to force-restart a stuck active loop.',
+      description: 'Lists all active memory loops when called with no arguments. Pass a worktree name for detailed status of a specific loop. Use restart to resume an inactive loop. Use restart with force to force-restart a stuck active loop.',
       args: {
         name: z.string().optional().describe('Worktree name to check for detailed status'),
-        restart: z.boolean().optional().describe('Restart an inactive loop by name'),
-        force: z.boolean().optional().describe('Force restart an active/stuck loop'),
+        restart: z.boolean().optional().default(false).describe('Restart an inactive loop by name'),
+        force: z.boolean().optional().default(false).describe('Force restart an active/stuck loop'),
       },
       execute: async (args) => {
         const active = loopService.listActive()
