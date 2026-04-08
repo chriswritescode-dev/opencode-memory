@@ -177,5 +177,78 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
         return `Deleted key "${args.key}"`
       },
     }),
+
+    'memory-kv-search': tool({
+      description: 'Search KV values by regex pattern. Returns matching lines with line numbers, grouped by key — like grep across files. Optionally scope to a single key or a key prefix.',
+      args: {
+        pattern: z.string().describe('Regex pattern to search for in KV values'),
+        key: z.string().optional().describe('Search only this specific key. If omitted, searches all keys.'),
+        prefix: z.string().optional().describe('Filter keys by prefix before searching (e.g. "plan:", "review-finding:")'),
+      },
+      execute: async (args) => {
+        logger.log(`memory-kv-search: pattern="${args.pattern}" key="${args.key ?? ''}" prefix="${args.prefix ?? ''}"`)
+
+        let regex: RegExp
+        try {
+          regex = new RegExp(args.pattern)
+        } catch (e) {
+          return `Invalid regex pattern: ${(e as Error).message}`
+        }
+
+        let entries: Array<{ key: string; data: unknown }>
+        if (args.key !== undefined) {
+          const value = kvService.get(projectId, args.key)
+          if (value === null) return `No value found for key "${args.key}"`
+          entries = [{ key: args.key, data: value }]
+        } else if (args.prefix !== undefined) {
+          entries = kvService.listByPrefix(projectId, args.prefix)
+        } else {
+          entries = kvService.list(projectId)
+        }
+
+        const MAX_MATCHES = 100
+        const grouped = new Map<string, Array<{ lineNum: number; text: string }>>()
+        let totalMatches = 0
+        let truncated = false
+
+        outer: for (const entry of entries) {
+          const valueStr = typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data, null, 2)
+          const lines = valueStr.split('\n')
+          for (let i = 0; i < lines.length; i++) {
+            const text = lines[i]
+            if (!regex.test(text)) continue
+            if (totalMatches >= MAX_MATCHES) {
+              truncated = true
+              break outer
+            }
+            const truncatedText = text.length > 2000 ? `${text.slice(0, 1997)}...` : text
+            if (!grouped.has(entry.key)) grouped.set(entry.key, [])
+            grouped.get(entry.key)!.push({ lineNum: i + 1, text: truncatedText })
+            totalMatches++
+          }
+        }
+
+        if (totalMatches === 0) return 'No matches found'
+
+        const keyCount = grouped.size
+        const outputParts: string[] = [`Found ${totalMatches} match${totalMatches === 1 ? '' : 'es'} across ${keyCount} key${keyCount === 1 ? '' : 's'}`]
+
+        for (const [key, matches] of grouped) {
+          outputParts.push('')
+          outputParts.push(`key: ${key}`)
+          for (const m of matches) {
+            outputParts.push(`  Line ${m.lineNum}: ${m.text}`)
+          }
+        }
+
+        if (truncated) {
+          outputParts.push('')
+          outputParts.push('(Results truncated: showing first 100 matches. Use a more specific pattern or scope to a key/prefix.)')
+        }
+
+        logger.log(`memory-kv-search: found ${totalMatches} matches across ${keyCount} keys`)
+        return outputParts.join('\n')
+      },
+    }),
   }
 }

@@ -162,8 +162,8 @@ Findings expire after 7 days automatically. If an issue persists, the next revie
 ## Retrieving Past Findings
 
 At the start of every review, before analyzing the diff:
-1. Use the memory-kv-list tool to get all active KV entries for the project
-2. Filter entries with keys starting with \`review-finding:\` that match files in the current diff
+1. Use the memory-kv-list tool with prefix \`review-finding:\` to get all active findings for the project
+2. Use memory-kv-search with prefix \`review-finding:\` to locate findings relevant to files in the current diff
 3. If open findings exist for files being changed, include them under a "### Previously Identified Issues" heading before new findings
 4. Check if any previously open findings have been addressed by the current changes — if so, delete them via the memory-kv-delete tool with the same key
 

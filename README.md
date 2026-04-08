@@ -75,10 +75,11 @@ Ephemeral key-value storage for project state with automatic TTL-based expiratio
 
 | Tool | Description |
 |------|-------------|
-| `memory-kv-set` | Store a value with optional TTL (default 7 days) |
-| `memory-kv-get` | Retrieve a value by key |
+| `memory-kv-set` | Store a value with optional TTL (default 7 days). Supports offset/limit for line-based editing and append mode. |
+| `memory-kv-get` | Retrieve a value by key. Returns line-numbered output. Supports offset/limit for pagination. |
 | `memory-kv-list` | List all active KV entries for the project. Optionally filter by key prefix. |
-| `memory-kv-delete` | Delete a key-value pair by key |
+| `memory-kv-delete` | Delete a key-value pair by key. |
+| `memory-kv-search` | Search KV values by regex pattern. Returns matching lines with line numbers, grouped by key. Optionally scope to a single key or prefix. |
 
 ### Loop Tools
 

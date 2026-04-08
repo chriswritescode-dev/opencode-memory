@@ -334,3 +334,155 @@ describe('memory-kv-set line-based operations', () => {
     expect(result).not.toContain('0:')
   })
 })
+
+describe('memory-kv-search', () => {
+  let db: Database
+  let tools: ReturnType<typeof createKvTools>
+  const projectId = 'test-project'
+
+  beforeEach(() => {
+    db = createTestDb()
+    const ctx = createMockContext(db)
+    tools = createKvTools(ctx)
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  test('searches single key and returns matching lines with correct line numbers', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'plan:test', 'line one\nTODO: fix this\nline three\nTODO: also this\nline five')
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'TODO', key: 'plan:test' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('Found 2 matches across 1 key')
+    expect(result).toContain('key: plan:test')
+    expect(result).toContain('Line 2: TODO: fix this')
+    expect(result).toContain('Line 4: TODO: also this')
+    expect(result).not.toContain('line one')
+    expect(result).not.toContain('line three')
+  })
+
+  test('searches all keys when no key or prefix specified', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'plan:a', 'alpha\nTODO: first')
+    kvService.set(projectId, 'plan:b', 'no match here\nnor here')
+    kvService.set(projectId, 'plan:c', 'TODO: third\nbeta')
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'TODO' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('Found 2 matches across 2 keys')
+    expect(result).toContain('key: plan:a')
+    expect(result).toContain('key: plan:c')
+    expect(result).not.toContain('key: plan:b')
+  })
+
+  test('prefix filters keys before searching', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'plan:one', 'TODO: in plan')
+    kvService.set(projectId, 'other:two', 'TODO: in other')
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'TODO', prefix: 'plan:' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('key: plan:one')
+    expect(result).not.toContain('key: other:two')
+  })
+
+  test('returns "No matches found" when pattern has no hits', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'test-key', 'nothing to find here')
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'XYZNOTFOUND' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toBe('No matches found')
+  })
+
+  test('invalid regex returns error message', async () => {
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: '[invalid' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('Invalid regex pattern:')
+  })
+
+  test('truncates results at 100 matches with notice', async () => {
+    const kvService = createKvService(db)
+    const lines = Array.from({ length: 150 }, (_, i) => `MATCH line ${i + 1}`)
+    kvService.set(projectId, 'big-key', lines.join('\n'))
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'MATCH', key: 'big-key' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('Found 100 matches')
+    expect(result).toContain('Results truncated')
+    expect(result).not.toContain('line 101')
+  })
+
+  test('key + pattern combination scopes search to specific key', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'target', 'find me here')
+    kvService.set(projectId, 'other', 'find me here too')
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'find me', key: 'target' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('key: target')
+    expect(result).not.toContain('key: other')
+    expect(result).toContain('Found 1 match across 1 key')
+  })
+
+  test('JSON object values are searched as pretty-printed text', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'json-key', { phase: 'implementation', status: 'pending' })
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: '"phase"', key: 'json-key' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('key: json-key')
+    expect(result).toContain('"phase": "implementation"')
+  })
+
+  test('returns error when key-scoped search finds no key', async () => {
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: 'anything', key: 'does-not-exist' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('No value found for key "does-not-exist"')
+  })
+
+  test('regex special characters work correctly', async () => {
+    const kvService = createKvService(db)
+    kvService.set(projectId, 'md-key', 'intro\n## Phase 1\nbody\n## Phase 2\nend')
+
+    const result = await tools['memory-kv-search'].execute(
+      { pattern: '^## ', key: 'md-key' },
+      { sessionID: 'test', directory: '/tmp' }
+    )
+
+    expect(result).toContain('Line 2: ## Phase 1')
+    expect(result).toContain('Line 4: ## Phase 2')
+    expect(result).not.toContain('intro')
+    expect(result).not.toContain('body')
+  })
+})
