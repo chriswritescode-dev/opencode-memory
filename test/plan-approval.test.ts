@@ -401,6 +401,8 @@ describe('Execute here bypass', () => {
       } as unknown as ToolContext['v2'],
     })
 
+    ctx.kvService.set(projectId, `plan:${sessionID}`, '# Test Plan\n\nThis is a test plan.')
+
     const hook = createToolExecuteAfterHook(ctx)
 
     const args = {
@@ -445,6 +447,8 @@ describe('Execute here bypass', () => {
       } as unknown as ToolContext['v2'],
       config: { executionModel: 'test-provider/test-model' } as PluginConfig,
     })
+
+    ctx.kvService.set(projectId, `plan:${sessionID}`, '# Test Plan\n\nThis is a test plan.')
 
     const afterHook = createToolExecuteAfterHook(ctx)
     const eventHook = createPlanApprovalEventHook(ctx)
@@ -653,211 +657,5 @@ describe('Execute here bypass', () => {
     expect(retrieved2).toBe(plan2)
     expect(retrieved1).not.toBe(plan2)
     expect(retrieved2).not.toBe(plan1)
-  })
-})
-
-describe('memory-kv-set plan:current surfacing', () => {
-  const projectId = 'test-project'
-  const sessionID = 'test-session-789'
-  const testDir = '/test/dir'
-  const openDbs: Database[] = []
-
-  afterEach(() => {
-    for (const db of openDbs) db.close()
-    openDbs.length = 0
-  })
-
-  function createMockContext(overrides?: Partial<ToolContext>): ToolContext {
-    const mockV2 = {
-      session: {
-        abort: async () => ({ data: {} }),
-        promptAsync: async () => ({ data: {} }),
-        create: async () => ({ data: { id: 'new-session-id' } }),
-      },
-      tui: {
-        selectSession: async () => ({ data: {} }),
-      },
-    } as unknown as ToolContext['v2']
-
-    const mockConfig = {
-      executionModel: 'test-provider/test-model',
-    } as PluginConfig
-
-    const mockLogger = createMockLogger()
-
-    const db = createTestDb()
-    openDbs.push(db)
-    const kvService = createKvService(db)
-    const loopService = createLoopService(kvService, projectId, mockLogger)
-
-    return {
-      projectId,
-      directory: testDir,
-      config: mockConfig,
-      logger: mockLogger,
-      db,
-      loopService,
-      kvService,
-      v2: mockV2,
-      ...overrides,
-    } as ToolContext
-  }
-
-  test('memory-kv-set with plan:current key surfaces plan from session-scoped key', async () => {
-    const ctx = createMockContext()
-    const hook = createToolExecuteAfterHook(ctx)
-
-    const planContent = '# Implementation Plan\n\n## Phase 1: Setup\n- Configure environment\n- Install dependencies\n\n## Phase 2: Implementation\n- Write code\n- Add tests'
-
-    // Simulate the tool execution by writing to session-scoped KV
-    ctx.kvService.set(projectId, `plan:${sessionID}`, planContent)
-
-    const args = {
-      key: 'plan:current',
-      value: planContent,
-      ttlMs: 604800000,
-    }
-    const output = {
-      title: 'Stored key "plan:current"',
-      output: 'Stored key "plan:current" (expires in 7 days)',
-      metadata: {},
-    }
-
-    await hook(
-      { tool: 'memory-kv-set', sessionID, callID: 'test-call', args },
-      output
-    )
-
-    expect(output.output).toContain('Stored key "plan:current" (expires in 7 days)')
-    expect(output.output).toContain('# Implementation Plan')
-    expect(output.output).toContain('## Phase 1: Setup')
-    expect(output.output).toContain('## Phase 2: Implementation')
-  })
-
-  test('memory-kv-set with different key does NOT surface content', async () => {
-    const ctx = createMockContext()
-    const hook = createToolExecuteAfterHook(ctx)
-
-    const args = {
-      key: 'other:key',
-      value: 'Some other value',
-      ttlMs: 604800000,
-    }
-    const output = {
-      title: 'Stored key "other:key"',
-      output: 'Stored key "other:key" (expires in 7 days)',
-      metadata: {},
-    }
-
-    await hook(
-      { tool: 'memory-kv-set', sessionID, callID: 'test-call', args },
-      output
-    )
-
-    expect(output.output).toBe('Stored key "other:key" (expires in 7 days)')
-    expect(output.output).not.toContain('Some other value')
-  })
-
-  test('memory-kv-set with plan:current and append: true surfaces full plan from session-scoped key', async () => {
-    const ctx = createMockContext()
-    const hook = createToolExecuteAfterHook(ctx)
-
-    // First, set initial content in session-scoped key
-    ctx.kvService.set(projectId, `plan:${sessionID}`, '# Initial Plan\n\n- Step 1')
-
-    // Simulate the append operation that the tool would perform
-    const existing = ctx.kvService.get<string>(projectId, `plan:${sessionID}`)
-    const existingStr = typeof existing === 'string' ? existing : JSON.stringify(existing, null, 2)
-    const appendedValue = `${existingStr}\n\n- Step 2`
-    ctx.kvService.set(projectId, `plan:${sessionID}`, appendedValue)
-
-    const args = {
-      key: 'plan:current',
-      value: '\n\n- Step 2',
-      append: true,
-    }
-    const output = {
-      title: 'Appended to key "plan:current"',
-      output: 'Appended to key "plan:current" (expires in 7 days)',
-      metadata: {},
-    }
-
-    await hook(
-      { tool: 'memory-kv-set', sessionID, callID: 'test-call', args },
-      output
-    )
-
-    expect(output.output).toContain('Appended to key "plan:current" (expires in 7 days)')
-    expect(output.output).toContain('# Initial Plan')
-    expect(output.output).toContain('- Step 1')
-    expect(output.output).toContain('- Step 2')
-  })
-
-  test('memory-kv-set with plan:current and offset surfaces full plan from session-scoped key', async () => {
-    const ctx = createMockContext()
-    const hook = createToolExecuteAfterHook(ctx)
-
-    // First, set initial content with multiple lines in session-scoped key
-    const initialContent = 'Line 1\nLine 2\nLine 3\nLine 4'
-    ctx.kvService.set(projectId, `plan:${sessionID}`, initialContent)
-
-    // Simulate the offset editing that the tool would perform
-    const existing = ctx.kvService.get<string>(projectId, `plan:${sessionID}`)
-    const existingStr = typeof existing === 'string' ? existing : JSON.stringify(existing, null, 2)
-    const lines = existingStr.split('\n')
-    const newLines = 'Line 2 Updated'.split('\n')
-    let idx = 1 - 1 // offset is 1-indexed, so offset=1 means idx=0
-    if (idx < 0) idx = 0
-    if (idx > lines.length) idx = lines.length
-    const limit = 1
-    lines.splice(idx, limit, ...newLines)
-    const result = lines.join('\n')
-    ctx.kvService.set(projectId, `plan:${sessionID}`, result)
-
-    const args = {
-      key: 'plan:current',
-      value: 'Line 2 Updated',
-      offset: 1,
-      limit: 1,
-    }
-    const output = {
-      title: 'Updated key "plan:current"',
-      output: 'Updated key "plan:current" (expires in 7 days)',
-      metadata: {},
-    }
-
-    await hook(
-      { tool: 'memory-kv-set', sessionID, callID: 'test-call', args },
-      output
-    )
-
-    expect(output.output).toContain('Updated key "plan:current" (expires in 7 days)')
-    expect(output.output).toContain('Line 2 Updated')
-    expect(output.output).toContain('Line 2')
-    expect(output.output).toContain('Line 3')
-    expect(output.output).toContain('Line 4')
-  })
-
-  test('memory-kv-set with empty value does not surface content', async () => {
-    const ctx = createMockContext()
-    const hook = createToolExecuteAfterHook(ctx)
-
-    const args = {
-      key: 'plan:current',
-      value: '',
-      ttlMs: 604800000,
-    }
-    const output = {
-      title: 'Stored key "plan:current"',
-      output: 'Stored key "plan:current" (expires in 7 days)',
-      metadata: {},
-    }
-
-    await hook(
-      { tool: 'memory-kv-set', sessionID, callID: 'test-call', args },
-      output
-    )
-
-    expect(output.output).toBe('Stored key "plan:current" (expires in 7 days)')
   })
 })

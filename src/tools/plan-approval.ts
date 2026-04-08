@@ -16,6 +16,7 @@ const PLAN_APPROVAL_LABELS = ['New session', 'Execute here', 'Loop (worktree)', 
 interface PendingExecution {
   directory: string
   executionModel?: { providerID: string; modelID: string }
+  planText?: string
 }
 
 const pendingExecutions = new Map<string, PendingExecution>()
@@ -58,21 +59,6 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
     input: { tool: string; sessionID: string; callID: string; args: unknown },
     output: { title: string; output: string; metadata: unknown }
   ) => {
-    // Surface plan:current content in tool output
-    if (input.tool === 'memory-kv-set') {
-      const args = input.args as { key?: string; value?: string; append?: boolean; offset?: number } | undefined
-      if (args?.key === 'plan:current') {
-        const planKey = `plan:${input.sessionID}`
-        const fullPlan = kvService.get<string>(projectId, planKey)
-        if (fullPlan) {
-          const planStr = typeof fullPlan === 'string' ? fullPlan : JSON.stringify(fullPlan, null, 2)
-          output.output = `${output.output}\n\n${planStr}`
-          logger.log('Plan output: surfaced plan:current content in tool output')
-        }
-      }
-      return
-    }
-
     if (input.tool === 'question') {
       const args = input.args as { questions?: Array<{ options?: Array<{ label: string }> }> } | undefined
       const options = args?.questions?.[0]?.options
@@ -87,9 +73,23 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
           const matchedLabel = PLAN_APPROVAL_LABELS.find((l) => answerLower === l.toLowerCase() || answerLower.startsWith(l.toLowerCase()))
           
           if (matchedLabel?.toLowerCase() === 'execute here') {
+            // Read plan from KV (same as "New session" path)
+            const planKey = `plan:${input.sessionID}`
+            const planCached = kvService.get<string>(projectId, planKey)
+            if (!planCached) {
+              output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is cached to KV key "plan:current" before approval.`
+              logger.error('Plan approval: plan not found in KV for "Execute here"')
+              return
+            }
+            const planText = typeof planCached === 'string' ? planCached : JSON.stringify(planCached, null, 2)
+            
+            // Delete from KV after reading (consistent with other paths)
+            kvService.delete(projectId, planKey)
+            
             pendingExecutions.set(input.sessionID, {
               directory: ctx.directory,
               executionModel: parseModelString(ctx.config.executionModel),
+              planText,
             })
             
             ctx.v2.session.abort({ sessionID: input.sessionID }).catch((err) => {
@@ -233,7 +233,11 @@ export function createPlanApprovalEventHook(ctx: ToolContext) {
     
     pendingExecutions.delete(sessionID)
     
-    const inPlacePrompt = 'The architect agent has created an implementation plan in this conversation above. You are now the code agent taking over this session. Your job is to execute the plan — edit files, run commands, create tests, and implement every phase. Do NOT just describe or summarize the changes. Actually make them.\n\nPlan reference: Execute the implementation plan from this conversation. Review all phases above and implement each one.'
+    const planRef = pending.planText
+      ? `\n\nImplementation Plan:\n${pending.planText}`
+      : '\n\nPlan reference: Execute the implementation plan from this conversation. Review all phases above and implement each one.'
+    
+    const inPlacePrompt = `The architect agent has created an implementation plan. You are now the code agent taking over this session. Your job is to execute the plan — edit files, run commands, create tests, and implement every phase. Do NOT just describe or summarize the changes. Actually make them.${planRef}`
     
     const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
       () => v2.session.promptAsync({

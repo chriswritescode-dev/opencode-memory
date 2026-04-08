@@ -33,7 +33,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
 
   return {
     'memory-kv-set': tool({
-      description: 'Store a key-value pair for the current project. Values expire after 7 days by default. Keys prefixed with "review-finding:" get an automatic "branch" field injected. Supports line-based editing via offset/limit parameters. When the key is "plan:current", the full stored plan is automatically echoed in the tool result so the user can see it — do not re-output the plan separately.',
+      description: 'Store a key-value pair for the current project. Values expire after 7 days by default. Keys prefixed with "review-finding:" get an automatic "branch" field injected. Supports line-based editing via offset/limit parameters.',
       args: {
         key: z.string().describe('The key to store the value under'),
         value: z.string().describe('The value to store (JSON string)'),
