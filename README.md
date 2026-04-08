@@ -53,7 +53,7 @@ The plugin bundles four agents that integrate with the memory system:
 
 The auditor agent is a read-only subagent (`temperature: 0.0`) that can read memory but cannot write, edit, or delete memories or execute plans. It is invoked by other agents via the Task tool to review code changes against stored project conventions and decisions.
 
-The architect agent operates in read-only mode (`temperature: 0.0`, all edits denied) with additional message-level read-only enforcement via the `experimental.chat.messages.transform` hook. After the user approves a plan you can choose to execute the plan in the same session with your execution model (less advanced model needed for cost / speed), new session, loop in the same branch or in external worktree. 
+The architect agent operates in read-only mode (`temperature: 0.0`, all edits denied) with message-level enforcement via the `experimental.chat.messages.transform` hook. Plans are built incrementally in the KV store during the planning session. After approval, execution is dispatched programmatically — no additional LLM calls are needed. The user can view and edit the cached plan from the sidebar or command palette before or during execution. 
 
 
 ## Tools
@@ -398,6 +398,21 @@ The sidebar shows all loops for the current project:
 - Status text: current phase for active loops, termination reason for completed/cancelled
 - Clicking a **worktree loop** opens the Loop Details dialog
 - Clicking a **non-worktree loop** navigates directly to its session
+- **Plan indicator** — When a plan exists for the current session, a 📋 Plan link appears. Click it to open the Plan Viewer dialog.
+
+![Sidebar showing plan link and active loops](docs/images/sidebar-plan.webp)
+
+### Plan Viewer
+
+When an architect session produces a plan, it is cached in the project KV store. The plan is accessible from the sidebar (📋 Plan link) or the command palette (`Memory: View plan`).
+
+The plan viewer dialog renders the full plan as GitHub-flavored markdown with syntax highlighting:
+
+![Plan viewer showing rendered markdown of an implementation plan](docs/images/plan-viewer.webp)
+
+Click `[edit]` to switch to edit mode, where you can modify the plan text directly in a textarea. Click **Save** to write changes back to the KV store, or `[view]` to return to the rendered view without saving.
+
+![Plan editor showing editable textarea with raw plan markdown](docs/images/plan-editor.webp)
 
 ### Loop Details Dialog
 
@@ -460,14 +475,24 @@ Set `sidebar` to `false` to completely disable the widget.
 
 ## architect → code Workflow
 
-Plan with a smart model, execute with a fast model. The architect agent researches and designs; the code agent implements.
+Plan with a smart model, execute with a fast model. The architect agent researches the codebase and designs an implementation plan; the code agent implements it.
 
-After the architect presents a plan, the user approves via one of four execution modes:
+### How Plans Work
 
-- **New session** — Creates a new Code session via `memory-plan-execute`
-- **Execute here** — Executes the plan in the current session (code agent takes over immediately)
-- **Loop (worktree)** — Runs the plan in an isolated git worktree with iterative coding/auditing via `memory-loop`. When `config.sandbox.mode` is `"docker"`, the loop automatically uses Docker sandbox.
-- **Loop** — Same as loop (worktree) but runs in the current directory (no worktree isolation, no sandbox)
+During planning, the architect writes the plan incrementally to the project KV store — building sections, appending content, and making targeted line-based edits. The plan is cached under a session-scoped key, not generated as a single LLM response.
+
+The user can view the cached plan at any time from the **sidebar** (📋 Plan link) or the **command palette** (`Memory: View plan`). The plan viewer renders full GitHub-flavored markdown and supports inline editing — the user can modify the plan directly before approving.
+
+### Execution
+
+After the architect presents a summary, the user approves via one of four execution modes:
+
+- **New session** — Creates a new Code session and sends the plan as the initial prompt. The architect session is aborted and the TUI navigates to the new session.
+- **Execute here** — The architect session is aborted and the code agent takes over the same session immediately with the plan.
+- **Loop (worktree)** — Creates an isolated git worktree and launches an iterative coding/auditing loop. When `config.sandbox.mode` is `"docker"`, the loop automatically uses Docker sandbox.
+- **Loop** — Same as Loop (worktree) but runs in the current directory without worktree isolation.
+
+Execution is immediate — there are no additional LLM calls between approval and execution. The system intercepts the user's approval answer, reads the cached plan from KV, and dispatches it programmatically to the code agent. The architect never processes the approval response.
 
 Set `executionModel` in your config to a fast model (e.g., Haiku) and use a smart model (e.g., Opus) for the architect session.
 
