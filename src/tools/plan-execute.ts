@@ -20,12 +20,13 @@ export function createPlanExecuteTools(ctx: ToolContext): Record<string, ReturnT
 
         let planText = args.plan
         if (!planText) {
-          const cached = kvService.get<string>(projectId, 'plan:current')
+          const planKey = `plan:${context.sessionID}`
+          const cached = kvService.get<string>(projectId, planKey)
           if (!cached) {
             return 'No plan found. Cache the plan to KV key "plan:current" before calling this tool, or pass it directly as the plan argument.'
           }
           planText = typeof cached === 'string' ? cached : JSON.stringify(cached, null, 2)
-          kvService.delete(projectId, 'plan:current')
+          kvService.delete(projectId, planKey)
         }
 
         const sessionTitle = args.title.length > 60 ? `${args.title.substring(0, 57)}...` : args.title

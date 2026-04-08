@@ -58,6 +58,21 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
     input: { tool: string; sessionID: string; callID: string; args: unknown },
     output: { title: string; output: string; metadata: unknown }
   ) => {
+    // Surface plan:current content in tool output
+    if (input.tool === 'memory-kv-set') {
+      const args = input.args as { key?: string; value?: string; append?: boolean; offset?: number } | undefined
+      if (args?.key === 'plan:current') {
+        const planKey = `plan:${input.sessionID}`
+        const fullPlan = kvService.get<string>(projectId, planKey)
+        if (fullPlan) {
+          const planStr = typeof fullPlan === 'string' ? fullPlan : JSON.stringify(fullPlan, null, 2)
+          output.output = `${output.output}\n\n${planStr}`
+          logger.log('Plan output: surfaced plan:current content in tool output')
+        }
+      }
+      return
+    }
+
     if (input.tool === 'question') {
       const args = input.args as { questions?: Array<{ options?: Array<{ label: string }> }> } | undefined
       const options = args?.questions?.[0]?.options
@@ -87,10 +102,11 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
           }
           
           // Programmatic dispatch for "New session" and "Loop" paths
-          const planCached = kvService.get<string>(projectId, 'plan:current')
+          const planKey = `plan:${input.sessionID}`
+          const planCached = kvService.get<string>(projectId, planKey)
           if (!planCached) {
             output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is cached to KV key "plan:current" before approval.`
-            logger.error('Plan approval: plan:current not found in KV')
+            logger.error('Plan approval: plan not found in KV')
             return
           }
           
@@ -110,7 +126,7 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
               }
               const newSessionId = createResult.data.id
               
-              kvService.delete(projectId, 'plan:current')
+              kvService.delete(projectId, `plan:${input.sessionID}`)
               
               retryWithModelFallback(
                 () => v2.session.promptAsync({
@@ -158,7 +174,7 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
             logger.log(`Plan approval: "${matchedLabel}" — starting loop`)
             
             kvService.set(projectId, `plan:${worktreeName}`, planText)
-            kvService.delete(projectId, 'plan:current')
+            kvService.delete(projectId, `plan:${input.sessionID}`)
             
             const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
             

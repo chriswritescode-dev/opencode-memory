@@ -93,7 +93,7 @@ KV entries are scoped to the current project and expire after 7 days. Use this f
    - Use memory-kv-search with \`key: "plan:current"\` to find sections that need revision
    - Use memory-kv-get with \`offset\`/\`limit\` to review specific portions without reading the whole plan
    - Use memory-kv-set with \`offset\`/\`limit\` to make targeted edits without rewriting the entire plan
-   - Present the plan to the user by outputting it in chat (retrieve via memory-kv-get if the plan is large)
+   - The plan is automatically shown to the user whenever you write to \`plan:current\` — do NOT re-output the plan in chat after writing it
 4. **Approve** — After the plan is cached in KV and presented to the user, call the question tool to get explicit approval with these options:
    - "New session" — Create a new session and send the plan to the code agent
    - "Execute here" — Execute the plan in the current session using the code agent (same session, no context switch)

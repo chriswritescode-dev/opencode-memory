@@ -7,6 +7,12 @@ const z = tool.schema
 export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
   const { kvService, projectId, logger, loopService } = ctx
 
+  const PLAN_CURRENT_KEY = 'plan:current'
+
+  function resolvePlanKey(key: string, sessionID: string): string {
+    return key === PLAN_CURRENT_KEY ? `plan:${sessionID}` : key
+  }
+
   function injectBranchField(value: unknown, directory: string): void {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return
     const active = loopService.listActive()
@@ -27,7 +33,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
 
   return {
     'memory-kv-set': tool({
-      description: 'Store a key-value pair for the current project. Values expire after 7 days by default. Keys prefixed with "review-finding:" get an automatic "branch" field injected. Supports line-based editing via offset/limit parameters.',
+      description: 'Store a key-value pair for the current project. Values expire after 7 days by default. Keys prefixed with "review-finding:" get an automatic "branch" field injected. Supports line-based editing via offset/limit parameters. When the key is "plan:current", the full stored plan is automatically echoed in the tool result so the user can see it — do not re-output the plan separately.',
       args: {
         key: z.string().describe('The key to store the value under'),
         value: z.string().describe('The value to store (JSON string)'),
@@ -38,13 +44,14 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
       },
       execute: async (args, context) => {
         logger.log(`memory-kv-set: key="${args.key}"`)
+        const resolvedKey = resolvePlanKey(args.key, context.sessionID)
 
         // Line editing mode - stores raw string, not compatible with branch injection
         if (args.offset !== undefined) {
           if (args.key.startsWith('review-finding:')) {
             return `Line editing (offset parameter) is not supported for "review-finding:" keys. Use full overwrite mode to ensure branch field is properly injected.`
           }
-          const existing = kvService.get<string>(projectId, args.key)
+          const existing = kvService.get<string>(projectId, resolvedKey)
           if (existing === null) {
             return `Key "${args.key}" not found. Cannot edit lines of a non-existent key.`
           }
@@ -58,7 +65,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
           if (limit < 0) return `Invalid limit: ${limit}. Limit must be non-negative.`
           lines.splice(idx, limit, ...newLines)
           const result = lines.join('\n')
-          kvService.set(projectId, args.key, result, args.ttlMs)
+          kvService.set(projectId, resolvedKey, result, args.ttlMs)
           const expiresAt = new Date(Date.now() + (args.ttlMs ?? 7 * 24 * 60 * 60 * 1000))
           logger.log(`memory-kv-set: updated key="${args.key}" (${lines.length} lines), expires=${expiresAt.toISOString()}`)
           return `Updated key "${args.key}" (${lines.length} lines, expires ${expiresAt.toISOString()})`
@@ -69,7 +76,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
           if (args.key.startsWith('review-finding:')) {
             return `Append mode is not supported for "review-finding:" keys. Use full overwrite mode to ensure branch field is properly injected.`
           }
-          const existing = kvService.get<string>(projectId, args.key)
+          const existing = kvService.get<string>(projectId, resolvedKey)
           let result: string
           if (existing === null) {
             result = args.value
@@ -77,7 +84,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
             const existingStr = typeof existing === 'string' ? existing : JSON.stringify(existing, null, 2)
             result = `${existingStr}\n${args.value}`
           }
-          kvService.set(projectId, args.key, result, args.ttlMs)
+          kvService.set(projectId, resolvedKey, result, args.ttlMs)
           const lineCount = result.split('\n').length
           const expiresAt = new Date(Date.now() + (args.ttlMs ?? 7 * 24 * 60 * 60 * 1000))
           logger.log(`memory-kv-set: appended to key="${args.key}" (${lineCount} lines), expires=${expiresAt.toISOString()}`)
@@ -96,7 +103,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
           injectBranchField(parsed, context.directory)
         }
 
-        kvService.set(projectId, args.key, parsed, args.ttlMs)
+        kvService.set(projectId, resolvedKey, parsed, args.ttlMs)
         const expiresAt = new Date(Date.now() + (args.ttlMs ?? 7 * 24 * 60 * 60 * 1000))
         logger.log(`memory-kv-set: stored key="${args.key}", expires=${expiresAt.toISOString()}`)
         return `Stored key "${args.key}" (expires ${expiresAt.toISOString()})`
@@ -110,9 +117,10 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
         offset: z.number().optional().describe('Line number to start from (1-indexed)'),
         limit: z.number().optional().describe('Maximum number of lines to return'),
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         logger.log(`memory-kv-get: key="${args.key}"`)
-        const value = kvService.get(projectId, args.key)
+        const resolvedKey = resolvePlanKey(args.key, context.sessionID)
+        const value = kvService.get(projectId, resolvedKey)
         if (value === null) {
           logger.log(`memory-kv-get: key="${args.key}" not found`)
           return `No value found for key "${args.key}"`
@@ -171,9 +179,10 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
       args: {
         key: z.string().describe('The key to delete'),
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         logger.log(`memory-kv-delete: key="${args.key}"`)
-        kvService.delete(projectId, args.key)
+        const resolvedKey = resolvePlanKey(args.key, context.sessionID)
+        kvService.delete(projectId, resolvedKey)
         return `Deleted key "${args.key}"`
       },
     }),
@@ -185,7 +194,7 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
         key: z.string().optional().describe('Search only this specific key. If omitted, searches all keys.'),
         prefix: z.string().optional().describe('Filter keys by prefix before searching (e.g. "plan:", "review-finding:")'),
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         logger.log(`memory-kv-search: pattern="${args.pattern}" key="${args.key ?? ''}" prefix="${args.prefix ?? ''}"`)
 
         let regex: RegExp
@@ -197,7 +206,8 @@ export function createKvTools(ctx: ToolContext): Record<string, ReturnType<typeo
 
         let entries: Array<{ key: string; data: unknown }>
         if (args.key !== undefined) {
-          const value = kvService.get(projectId, args.key)
+          const resolvedKey = resolvePlanKey(args.key, context.sessionID)
+          const value = kvService.get(projectId, resolvedKey)
           if (value === null) return `No value found for key "${args.key}"`
           entries = [{ key: args.key, data: value }]
         } else if (args.prefix !== undefined) {

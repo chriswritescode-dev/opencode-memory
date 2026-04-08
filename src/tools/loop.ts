@@ -246,7 +246,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
         title: z.string().describe('Short title for the session (shown in session list)'),
         worktree: z.boolean().optional().default(false).describe('Run in isolated git worktree instead of current directory'),
       },
-      execute: async (args, _context) => {
+      execute: async (args, context) => {
         if (config.loop?.enabled === false) {
           return 'Loops are disabled in plugin config. Use memory-plan-execute instead.'
         }
@@ -255,12 +255,13 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
 
         let planText = args.plan
         if (!planText) {
-          const cached = ctx.kvService.get<string>(ctx.projectId, 'plan:current')
+          const planKey = `plan:${context.sessionID}`
+          const cached = ctx.kvService.get<string>(ctx.projectId, planKey)
           if (!cached) {
             return 'No plan found. Cache the plan to KV key "plan:current" before calling this tool, or pass it directly as the plan argument.'
           }
           planText = typeof cached === 'string' ? cached : JSON.stringify(cached, null, 2)
-          ctx.kvService.delete(ctx.projectId, 'plan:current')
+          ctx.kvService.delete(ctx.projectId, planKey)
         }
 
         const sessionTitle = args.title.length > 60 ? `${args.title.substring(0, 57)}...` : args.title
