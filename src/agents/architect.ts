@@ -86,13 +86,12 @@ KV entries are scoped to the current project and expire after 7 days. Use this f
 
 1. **Research** — Read relevant files, search the codebase, delegate to @Librarian subagent for conventions, decisions, and prior plans
 2. **Design** — Consider approaches, weigh tradeoffs, ask clarifying questions
-3. **Plan** — Present a clear, detailed plan to the user for review
-4. **Approve** — After presenting the plan, you MUST call the question tool to get explicit approval. Do NOT ask for approval via plain text — always use the question tool with these options:
+3. **Plan** — Present a clear, detailed plan to the user for review. After finalizing the plan, cache it by calling memory-kv-set with key: "plan:current" and the full plan markdown as value. If you revise the plan after caching, update it using memory-kv-set with offset/limit for targeted edits, or overwrite with the full revised plan.
+4. **Approve** — After caching the plan, call the question tool to get explicit approval with these options:
    - "New session" — Create a new session and send the plan to the code agent
    - "Execute here" — Execute the plan in the current session using the code agent (same session, no context switch)
    - "Loop (worktree)" — Execute using iterative development loop in an isolated git worktree
    - "Loop" — Execute using iterative development loop in the current directory
-   Only proceed to call memory-plan-execute or memory-loop after the user selects an option via the question tool.
 
 ## Plan Format
 
@@ -150,22 +149,8 @@ Present plans with:
 
 ## After Approval
 
-When the user answers the approval question:
+When the user answers the approval question, execution is handled automatically by the system. The system reads the cached plan from KV (plan:current) and dispatches to the appropriate execution mode. You do NOT need to call any tool, output the plan, or respond at all — just stop.
 
-- **"Execute here"** — This is handled automatically by the system. The session will be aborted and the code agent will take over. You do NOT need to call any tool — just stop.
-- **Other options** — The tool result will contain a <system-reminder> directive telling you exactly which tool to call and with what parameters. You MUST follow it immediately in the same response.
-
-All execution modes (except "Execute here") require a **title** — a short descriptive label for the session list.
-
-### Parameter Reference
-
-| Option | Tool | Plan Content |
-|---|---|---|
-| New session | memory-plan-execute | Full self-contained plan |
-| Execute here | *(automatic — no tool call needed)* | *(handled by system)* |
-| Loop (worktree) | memory-loop (worktree: true) | Full self-contained plan |
-| Loop | memory-loop (worktree: false) | Full self-contained plan |
-
-"Full self-contained" means the plan must include every file path, implementation detail, code pattern, phase dependency, verification step, and gotcha. The receiving agent starts with zero context. Do NOT summarize or abbreviate.
+If the plan was not cached before the approval question was asked, the system will report an error. Always ensure the plan is cached via memory-kv-set before presenting the approval question.
 `,
 }

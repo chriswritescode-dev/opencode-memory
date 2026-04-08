@@ -42,39 +42,6 @@ describe('Plan Approval Tool Interception', () => {
 
   const PLAN_APPROVAL_LABELS = ['New session', 'Execute here', 'Loop (worktree)', 'Loop']
 
-  const PLAN_APPROVAL_DIRECTIVES: Record<string, string> = {
-    'New session': `<system-reminder>
-The user selected "New session". You MUST now call memory-plan-execute in this response with:
-- plan: The FULL self-contained implementation plan (the code agent starts with zero context)
-- title: A short descriptive title for the session
-- inPlace: false (or omit)
-Do NOT output text without also making this tool call.
-</system-reminder>`,
-    'Execute here': `<system-reminder>
-The user selected "Execute here". You MUST now call memory-plan-execute in this response with:
-- plan: "See plan above" (the code agent continues this session and already has context)
-- title: A short descriptive title for the session
-- inPlace: true
-Do NOT output text without also making this tool call.
-</system-reminder>`,
-    'Loop (worktree)': `<system-reminder>
-The user selected "Loop (worktree)". You MUST now call memory-loop in this response with:
-- plan: The FULL self-contained implementation plan (runs in an isolated worktree with no prior context)
-- title: A short descriptive title for the session
-- worktree: true
-Do NOT output text without also making this tool call.
-</system-reminder>`,
-    'Loop': `<system-reminder>
-The user selected "Loop". You MUST now call memory-loop in this response with:
-- plan: The FULL self-contained implementation plan (runs in the current directory with no prior context)
-- title: A short descriptive title for the session
-- worktree: false
-Do NOT output text without also making this tool call.
-</system-reminder>`,
-  }
-
-  const CANCEL_DIRECTIVE = '<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (memory-plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>'
-
   beforeEach(() => {
     db = createTestDb()
     const kvService = createKvService(db)
@@ -85,32 +52,32 @@ Do NOT output text without also making this tool call.
     db.close()
   })
 
-    function simulateToolExecuteAfter(
-      tool: string,
-      args: unknown,
-      output: { title: string; output: string; metadata: unknown },
-      sessionActive = false
-    ) {
-      if (sessionActive) {
-        const state = {
-          active: true,
-          sessionId: sessionID,
-          worktreeName: 'test-worktree',
-          worktreeDir: '/test/worktree',
-          worktreeBranch: 'opencode/loop-test',
-          iteration: 1,
-          maxIterations: 5,
-          completionSignal: 'ALL_PHASES_COMPLETE',
-          startedAt: new Date().toISOString(),
-          prompt: 'Test prompt',
-          phase: 'coding' as const,
-          audit: false,
-          errorCount: 0,
-          auditCount: 0,
-          worktree: true,
-        }
-        loopService.setState(sessionID, state)
+  function simulateToolExecuteAfter(
+    tool: string,
+    args: unknown,
+    output: { title: string; output: string; metadata: unknown },
+    sessionActive = false
+  ) {
+    if (sessionActive) {
+      const state = {
+        active: true,
+        sessionId: sessionID,
+        worktreeName: 'test-worktree',
+        worktreeDir: '/test/worktree',
+        worktreeBranch: 'opencode/loop-test',
+        iteration: 1,
+        maxIterations: 5,
+        completionSignal: 'ALL_PHASES_COMPLETE',
+        startedAt: new Date().toISOString(),
+        prompt: 'Test prompt',
+        phase: 'coding' as const,
+        audit: false,
+        errorCount: 0,
+        auditCount: 0,
+        worktree: true,
       }
+      loopService.setState(sessionID, state)
+    }
 
     if (tool === 'question') {
       const questionArgs = args as { questions?: Array<{ options?: Array<{ label: string }> }> } | undefined
@@ -122,8 +89,16 @@ Do NOT output text without also making this tool call.
           const metadata = output.metadata as { answers?: string[][] } | undefined
           const answer = metadata?.answers?.[0]?.[0]?.trim() ?? output.output.trim()
           const matchedLabel = PLAN_APPROVAL_LABELS.find((l) => answer === l || answer.startsWith(l))
-          const directive = matchedLabel ? PLAN_APPROVAL_DIRECTIVES[matchedLabel] : CANCEL_DIRECTIVE
-          output.output = `${output.output}\n\n${directive}`
+          
+          if (matchedLabel?.toLowerCase() === 'execute here') {
+            output.output = `${output.output}\n\nSwitching to code agent for execution...`
+          } else if (matchedLabel) {
+            // Programmatic dispatch - no directive injection
+            output.output = `${output.output}\n\n[Programmatic dispatch - no directive]`
+          } else {
+            // Custom answer fallback
+            output.output = `${output.output}\n\n<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (memory-plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>`
+          }
         }
       }
       return
@@ -143,7 +118,7 @@ Do NOT output text without also making this tool call.
     output.output = LOOP_BLOCKED_TOOLS[tool]!
   }
 
-  test('Detects plan approval question and injects "New session" directive', () => {
+  test('Detects plan approval question and handles "New session" programmatically', () => {
     const args = {
       questions: [{
         question: 'How would you like to proceed?',
@@ -160,12 +135,11 @@ Do NOT output text without also making this tool call.
     simulateToolExecuteAfter('question', args, output)
 
     expect(output.output).toContain('New session')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-plan-execute')
-    expect(output.output).toContain('inPlace: false')
+    expect(output.output).not.toContain('<system-reminder>')
+    expect(output.output).not.toContain('memory-plan-execute')
   })
 
-  test('Detects plan approval question and injects "Execute here" directive', () => {
+  test('Detects plan approval question and handles "Execute here" with abort', () => {
     const args = {
       questions: [{
         question: 'How would you like to proceed?',
@@ -182,12 +156,11 @@ Do NOT output text without also making this tool call.
     simulateToolExecuteAfter('question', args, output)
 
     expect(output.output).toContain('Execute here')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-plan-execute')
-    expect(output.output).toContain('inPlace: true')
+    expect(output.output).toContain('Switching to code agent')
+    expect(output.output).not.toContain('<system-reminder>')
   })
 
-  test('Detects plan approval question and injects "Loop (worktree)" directive', () => {
+  test('Detects plan approval question and handles "Loop (worktree)" programmatically', () => {
     const args = {
       questions: [{
         question: 'How would you like to proceed?',
@@ -204,12 +177,11 @@ Do NOT output text without also making this tool call.
     simulateToolExecuteAfter('question', args, output)
 
     expect(output.output).toContain('Loop (worktree)')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-loop')
-    expect(output.output).toContain('worktree: true')
+    expect(output.output).not.toContain('<system-reminder>')
+    expect(output.output).not.toContain('memory-loop')
   })
 
-  test('Detects plan approval question and injects "Loop" directive', () => {
+  test('Detects plan approval question and handles "Loop" programmatically', () => {
     const args = {
       questions: [{
         question: 'How would you like to proceed?',
@@ -226,12 +198,11 @@ Do NOT output text without also making this tool call.
     simulateToolExecuteAfter('question', args, output)
 
     expect(output.output).toContain('Loop')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-loop')
-    expect(output.output).toContain('worktree: false')
+    expect(output.output).not.toContain('<system-reminder>')
+    expect(output.output).not.toContain('memory-loop')
   })
 
-  test('Injects cancel directive for unknown answer', () => {
+  test('Injects directive for unknown answer', () => {
     const args = {
       questions: [{
         question: 'How would you like to proceed?',
@@ -270,8 +241,7 @@ Do NOT output text without also making this tool call.
     simulateToolExecuteAfter('question', args, output)
 
     expect(output.output).toContain('New session (with custom config)')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-plan-execute')
+    expect(output.output).not.toContain('<system-reminder>')
   })
 
   test('Does not match partial label in middle of text', () => {
@@ -367,161 +337,6 @@ Do NOT output text without also making this tool call.
     expect(output.title).toBe('')
     expect(output.output).toBe('test')
   })
-
-  test('Detects plan approval using metadata.answers when output is full sentence', () => {
-    const args = {
-      questions: [{
-        question: 'How would you like to proceed?',
-        options: [
-          { label: 'New session', description: 'Create new session' },
-          { label: 'Execute here', description: 'Execute here' },
-          { label: 'Loop (worktree)', description: 'Loop worktree' },
-          { label: 'Loop', description: 'Loop in place' },
-        ],
-      }],
-    }
-    const output = {
-      title: 'Asked 1 question',
-      output: 'User has answered your questions: "How would you like to proceed?"="Loop (worktree)". You can now continue with the user\'s answers in mind.',
-      metadata: { answers: [['Loop (worktree)']] },
-    }
-
-    simulateToolExecuteAfter('question', args, output)
-
-    expect(output.output).toContain('Loop (worktree)')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-loop')
-    expect(output.output).toContain('worktree: true')
-  })
-
-  test('Detects "Loop" using metadata.answers when output is full sentence', () => {
-    const args = {
-      questions: [{
-        question: 'How would you like to proceed?',
-        options: [
-          { label: 'New session', description: 'Create new session' },
-          { label: 'Execute here', description: 'Execute here' },
-          { label: 'Loop (worktree)', description: 'Loop worktree' },
-          { label: 'Loop', description: 'Loop in place' },
-        ],
-      }],
-    }
-    const output = {
-      title: 'Asked 1 question',
-      output: 'User has answered your questions: "How would you like to proceed?"="Loop". You can now continue with the user\'s answers in mind.',
-      metadata: { answers: [['Loop']] },
-    }
-
-    simulateToolExecuteAfter('question', args, output)
-
-    expect(output.output).toContain('Loop')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-loop')
-    expect(output.output).toContain('worktree: false')
-  })
-
-  test('Detects "New session" using metadata.answers when output is full sentence', () => {
-    const args = {
-      questions: [{
-        question: 'How would you like to proceed?',
-        options: [
-          { label: 'New session', description: 'Create new session' },
-          { label: 'Execute here', description: 'Execute here' },
-          { label: 'Loop (worktree)', description: 'Loop worktree' },
-          { label: 'Loop', description: 'Loop in place' },
-        ],
-      }],
-    }
-    const output = {
-      title: 'Asked 1 question',
-      output: 'User has answered your questions: "How would you like to proceed?"="New session". You can now continue with the user\'s answers in mind.',
-      metadata: { answers: [['New session']] },
-    }
-
-    simulateToolExecuteAfter('question', args, output)
-
-    expect(output.output).toContain('New session')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-plan-execute')
-    expect(output.output).toContain('inPlace: false')
-  })
-
-  test('Detects "Execute here" using metadata.answers when output is full sentence', () => {
-    const args = {
-      questions: [{
-        question: 'How would you like to proceed?',
-        options: [
-          { label: 'New session', description: 'Create new session' },
-          { label: 'Execute here', description: 'Execute here' },
-          { label: 'Loop (worktree)', description: 'Loop worktree' },
-          { label: 'Loop', description: 'Loop in place' },
-        ],
-      }],
-    }
-    const output = {
-      title: 'Asked 1 question',
-      output: 'User has answered your questions: "How would you like to proceed?"="Execute here". You can now continue with the user\'s answers in mind.',
-      metadata: { answers: [['Execute here']] },
-    }
-
-    simulateToolExecuteAfter('question', args, output)
-
-    expect(output.output).toContain('Execute here')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-plan-execute')
-    expect(output.output).toContain('inPlace: true')
-  })
-
-  test('Falls back to output.output when metadata.answers is missing', () => {
-    const args = {
-      questions: [{
-        question: 'How would you like to proceed?',
-        options: [
-          { label: 'New session', description: 'Create new session' },
-          { label: 'Execute here', description: 'Execute here' },
-          { label: 'Loop (worktree)', description: 'Loop worktree' },
-          { label: 'Loop', description: 'Loop in place' },
-        ],
-      }],
-    }
-    const output = {
-      title: 'Asked 1 question',
-      output: 'New session',
-      metadata: {},
-    }
-
-    simulateToolExecuteAfter('question', args, output)
-
-    expect(output.output).toContain('New session')
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('memory-plan-execute')
-    expect(output.output).toContain('inPlace: false')
-  })
-
-  test('Injects cancel directive when metadata.answers contains unknown label', () => {
-    const args = {
-      questions: [{
-        question: 'How would you like to proceed?',
-        options: [
-          { label: 'New session', description: 'Create new session' },
-          { label: 'Execute here', description: 'Execute here' },
-          { label: 'Loop (worktree)', description: 'Loop worktree' },
-          { label: 'Loop', description: 'Loop in place' },
-        ],
-      }],
-    }
-    const output = {
-      title: 'Asked 1 question',
-      output: 'User has answered your questions: "How would you like to proceed?"="Some custom answer". You can now continue with the user\'s answers in mind.',
-      metadata: { answers: [['Some custom answer']] },
-    }
-
-    simulateToolExecuteAfter('question', args, output)
-
-    expect(output.output).toContain('<system-reminder>')
-    expect(output.output).toContain('custom response')
-    expect(output.output).toContain('respond accordingly')
-  })
 })
 
 describe('Execute here bypass', () => {
@@ -540,6 +355,10 @@ describe('Execute here bypass', () => {
       session: {
         abort: async () => ({ data: {} }),
         promptAsync: async () => ({ data: {} }),
+        create: async () => ({ data: { id: 'new-session-id' } }),
+      },
+      tui: {
+        selectSession: async () => ({ data: {} }),
       },
     } as unknown as ToolContext['v2']
 
@@ -561,6 +380,7 @@ describe('Execute here bypass', () => {
       logger: mockLogger,
       db,
       loopService,
+      kvService,
       v2: mockV2,
       ...overrides,
     } as ToolContext
@@ -573,6 +393,10 @@ describe('Execute here bypass', () => {
         session: {
           abort: abortSpy,
           promptAsync: async () => ({ data: {} }),
+          create: async () => ({ data: { id: 'new-session-id' } }),
+        },
+        tui: {
+          selectSession: async () => ({ data: {} }),
         },
       } as unknown as ToolContext['v2'],
     })
@@ -613,6 +437,10 @@ describe('Execute here bypass', () => {
         session: {
           abort: async () => ({ data: {} }),
           promptAsync: promptSpy,
+          create: async () => ({ data: { id: 'new-session-id' } }),
+        },
+        tui: {
+          selectSession: async () => ({ data: {} }),
         },
       } as unknown as ToolContext['v2'],
       config: { executionModel: 'test-provider/test-model' } as PluginConfig,
@@ -666,13 +494,17 @@ describe('Execute here bypass', () => {
     expect(promptSpy).toHaveBeenCalledTimes(1)
   })
 
-  test('Other approval labels still inject directives', async () => {
+  test('Other approval labels do not inject directives (programmatic dispatch)', async () => {
     const abortSpy = mock(() => Promise.resolve({ data: {} }))
     const ctx = createMockContext({
       v2: {
         session: {
           abort: abortSpy,
           promptAsync: async () => ({ data: {} }),
+          create: async () => ({ data: { id: 'new-session-id' } }),
+        },
+        tui: {
+          selectSession: async () => ({ data: {} }),
         },
       } as unknown as ToolContext['v2'],
     })
@@ -702,7 +534,7 @@ describe('Execute here bypass', () => {
         output
       )
 
-      expect(output.output).toContain('<system-reminder>')
+      expect(output.output).not.toContain('<system-reminder>')
       expect(abortSpy).not.toHaveBeenCalled()
       abortSpy.mockClear()
     }
@@ -715,6 +547,10 @@ describe('Execute here bypass', () => {
         session: {
           abort: async () => ({ data: {} }),
           promptAsync: promptSpy,
+          create: async () => ({ data: { id: 'new-session-id' } }),
+        },
+        tui: {
+          selectSession: async () => ({ data: {} }),
         },
       } as unknown as ToolContext['v2'],
     })
@@ -729,5 +565,68 @@ describe('Execute here bypass', () => {
     })
 
     expect(promptSpy).not.toHaveBeenCalled()
+  })
+
+  test('New session path reads plan from KV and deletes after dispatch', async () => {
+    const db = createTestDb()
+    openDbs.push(db)
+    const kvService = createKvService(db)
+    
+    // Store a plan in KV
+    kvService.set(projectId, 'plan:current', '# Test Plan\n\nThis is a test plan.')
+    
+    const createSpy = mock(() => Promise.resolve({ data: { id: 'new-session-123' } }))
+    const promptSpy = mock(() => Promise.resolve({ data: {} }))
+    const abortSpy = mock(() => Promise.resolve({ data: {} }))
+    
+    const ctx = {
+      projectId,
+      directory: testDir,
+      config: { executionModel: 'test-provider/test-model' } as PluginConfig,
+      logger: createMockLogger(),
+      kvService,
+      loopService: createLoopService(kvService, projectId, createMockLogger()),
+      v2: {
+        session: {
+          abort: abortSpy,
+          promptAsync: promptSpy,
+          create: createSpy,
+        },
+        tui: {
+          selectSession: async () => ({ data: {} }),
+        },
+      } as unknown as ToolContext['v2'],
+    } as ToolContext
+
+    const hook = createToolExecuteAfterHook(ctx)
+
+    const args = {
+      questions: [{
+        question: 'How would you like to proceed?',
+        options: [
+          { label: 'New session', description: 'Create new session' },
+          { label: 'Execute here', description: 'Execute here' },
+          { label: 'Loop (worktree)', description: 'Loop worktree' },
+          { label: 'Loop', description: 'Loop in place' },
+        ],
+      }],
+    }
+    const output = {
+      title: 'Asked 1 question',
+      output: 'New session',
+      metadata: { answers: [['New session']] },
+    }
+
+    await hook(
+      { tool: 'question', sessionID: 'test-session', callID: 'test-call', args },
+      output
+    )
+
+    // Give async operations time to complete
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // Verify plan was deleted
+    const planAfter = kvService.get(projectId, 'plan:current')
+    expect(planAfter).toBeNull()
   })
 })

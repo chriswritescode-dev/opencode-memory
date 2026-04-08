@@ -1,6 +1,9 @@
 import type { ToolContext } from './types'
 import type { Hooks } from '@opencode-ai/plugin'
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
+import { setupLoop } from './loop'
+import { slugify } from '../utils/logger'
+import { DEFAULT_COMPLETION_SIGNAL } from '../services/loop'
 
 const LOOP_BLOCKED_TOOLS: Record<string, string> = {
   question: 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
@@ -17,31 +20,17 @@ interface PendingExecution {
 
 const pendingExecutions = new Map<string, PendingExecution>()
 
-const PLAN_APPROVAL_DIRECTIVES: Record<string, string> = {
-  'New session': `<system-reminder>
-The user selected "New session". You MUST now call memory-plan-execute in this response with:
-- plan: The FULL self-contained implementation plan (the code agent starts with zero context)
-- title: A short descriptive title for the session
-- worktree: true (or omit)
-Do NOT output text without also making this tool call.
-</system-reminder>`,
-  'Loop (worktree)': `<system-reminder>
-The user selected "Loop (worktree)". You MUST now call memory-loop in this response with:
-- plan: The FULL self-contained implementation plan (runs in an isolated worktree with no prior context)
-- title: A short descriptive title for the session
-- worktree: true
-Do NOT output text without also making this tool call.
-</system-reminder>`,
-  'Loop': `<system-reminder>
-The user selected "Loop". You MUST now call memory-loop in this response with:
-- plan: The FULL self-contained implementation plan (runs in the current directory with no prior context)
-- title: A short descriptive title for the session
-- worktree: false
-Do NOT output text without also making this tool call.
-</system-reminder>`,
+function extractPlanTitle(planContent: string): string {
+  const headingMatch = planContent.match(/^#+\s+(.+)$/m)
+  if (headingMatch?.[1]) {
+    const title = headingMatch[1].trim()
+    return title.length > 60 ? `${title.substring(0, 57)}...` : title
+  }
+  const firstLine = planContent.split('\n')[0]?.trim() ?? 'Implementation Plan'
+  return firstLine.length > 60 ? `${firstLine.substring(0, 57)}...` : firstLine
 }
 
-export { LOOP_BLOCKED_TOOLS, PLAN_APPROVAL_LABELS, PLAN_APPROVAL_DIRECTIVES }
+export { LOOP_BLOCKED_TOOLS, PLAN_APPROVAL_LABELS }
 
 export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execute.before'] {
   const { loopService, logger } = ctx
@@ -63,7 +52,7 @@ export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execu
 }
 
 export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execute.after'] {
-  const { loopService, logger } = ctx
+  const { loopService, logger, kvService, projectId, v2, config } = ctx
 
   return async (
     input: { tool: string; sessionID: string; callID: string; args: unknown },
@@ -97,9 +86,105 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
             return
           }
           
-          const directive = matchedLabel ? PLAN_APPROVAL_DIRECTIVES[matchedLabel] : '<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (memory-plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>'
-          output.output = `${output.output}\n\n${directive}`
-          logger.log(`Plan approval: detected "${matchedLabel ?? 'cancel/custom'}" answer, injected directive`)
+          // Programmatic dispatch for "New session" and "Loop" paths
+          const planCached = kvService.get<string>(projectId, 'plan:current')
+          if (!planCached) {
+            output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is cached to KV key "plan:current" before approval.`
+            logger.error('Plan approval: plan:current not found in KV')
+            return
+          }
+          
+          const planText = typeof planCached === 'string' ? planCached : JSON.stringify(planCached, null, 2)
+          const title = extractPlanTitle(planText)
+          
+          if (matchedLabel === 'New session') {
+            logger.log('Plan approval: "New session" — creating new session')
+            
+            const executionModel = parseModelString(config.executionModel)
+            
+            v2.session.create({ title, directory: ctx.directory }).then((createResult) => {
+              if (createResult.error || !createResult.data) {
+                logger.error('Plan approval: failed to create new session', createResult.error)
+                output.output = 'Creating new session for plan execution... Failed to create session.'
+                return
+              }
+              const newSessionId = createResult.data.id
+              
+              kvService.delete(projectId, 'plan:current')
+              
+              retryWithModelFallback(
+                () => v2.session.promptAsync({
+                  sessionID: newSessionId,
+                  directory: ctx.directory,
+                  agent: 'code',
+                  parts: [{ type: 'text', text: planText }],
+                  ...(executionModel ? { model: executionModel } : {}),
+                }),
+                () => v2.session.promptAsync({
+                  sessionID: newSessionId,
+                  directory: ctx.directory,
+                  agent: 'code',
+                  parts: [{ type: 'text', text: planText }],
+                }),
+                executionModel,
+                logger,
+              ).then(({ result }) => {
+                if (result.error) {
+                  logger.error('Plan approval: failed to send plan to new session', result.error)
+                } else {
+                  v2.tui.selectSession({ sessionID: newSessionId }).catch((err) => {
+                    logger.error('Plan approval: failed to navigate TUI', err)
+                  })
+                }
+              })
+            }).catch((err) => {
+              logger.error('Plan approval: failed to create new session', err)
+              output.output = 'Creating new session for plan execution... Failed to create session.'
+            })
+            
+            v2.session.abort({ sessionID: input.sessionID }).catch((err) => {
+              logger.error('Plan approval: failed to abort architect session', err)
+            })
+            return
+          }
+          
+          if (matchedLabel === 'Loop (worktree)' || matchedLabel === 'Loop') {
+            const isWorktree = matchedLabel === 'Loop (worktree)'
+            const worktreeName = slugify(title)
+            
+            output.output = isWorktree 
+              ? 'Starting loop in worktree...' 
+              : 'Starting loop in-place...'
+            logger.log(`Plan approval: "${matchedLabel}" — starting loop`)
+            
+            kvService.set(projectId, `plan:${worktreeName}`, planText)
+            kvService.delete(projectId, 'plan:current')
+            
+            const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
+            
+            setupLoop(ctx, {
+              prompt: planText,
+              sessionTitle: `Loop: ${title}`,
+              completionSignal: DEFAULT_COMPLETION_SIGNAL,
+              maxIterations: config.loop?.defaultMaxIterations ?? 0,
+              audit: config.loop?.defaultAudit ?? true,
+              agent: 'code',
+              model: loopModel,
+              worktree: isWorktree,
+              onLoopStarted: (id) => ctx.loopHandler.startWatchdog(id),
+            }).catch((err) => {
+              logger.error('Plan approval: failed to start loop', err)
+            })
+            
+            v2.session.abort({ sessionID: input.sessionID }).catch((err) => {
+              logger.error('Plan approval: failed to abort architect session', err)
+            })
+            return
+          }
+          
+          // Custom answer fallback
+          output.output = `${output.output}\n\n<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (memory-plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>`
+          logger.log(`Plan approval: detected custom answer`)
         }
       }
       return
