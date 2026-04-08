@@ -150,18 +150,21 @@ Present plans with:
 
 ## After Approval
 
-When the user answers the approval question, the tool result will contain a <system-reminder> directive telling you exactly which tool to call and with what parameters. You MUST follow it immediately in the same response.
+When the user answers the approval question:
 
-All execution modes require a **title** — a short descriptive label for the session list.
+- **"Execute here"** — This is handled automatically by the system. The session will be aborted and the code agent will take over. You do NOT need to call any tool — just stop.
+- **Other options** — The tool result will contain a <system-reminder> directive telling you exactly which tool to call and with what parameters. You MUST follow it immediately in the same response.
+
+All execution modes (except "Execute here") require a **title** — a short descriptive label for the session list.
 
 ### Parameter Reference
 
-| Option | Tool | worktree | Plan Content |
-|---|---|---|---|
-| New session | memory-plan-execute | false | Full self-contained plan |
-| Execute here | memory-plan-execute | true | "Execute the implementation plan from this conversation. Review all phases above and implement each one." |
-| Loop (worktree) | memory-loop | true | Full self-contained plan |
-| Loop | memory-loop | false | Full self-contained plan |
+| Option | Tool | Plan Content |
+|---|---|---|
+| New session | memory-plan-execute | Full self-contained plan |
+| Execute here | *(automatic — no tool call needed)* | *(handled by system)* |
+| Loop (worktree) | memory-loop (worktree: true) | Full self-contained plan |
+| Loop | memory-loop (worktree: false) | Full self-contained plan |
 
 "Full self-contained" means the plan must include every file path, implementation detail, code pattern, phase dependency, verification step, and gotcha. The receiving agent starts with zero context. Do NOT summarize or abbreviate.
 `,

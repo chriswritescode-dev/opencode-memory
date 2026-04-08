@@ -1,8 +1,11 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createKvService } from '../src/services/kv'
 import { createLoopService } from '../src/services/loop'
 import type { Logger } from '../src/types'
+import { createToolExecuteAfterHook, createPlanApprovalEventHook } from '../src/tools/plan-approval'
+import type { ToolContext } from '../src/tools/types'
+import type { PluginConfig } from '../src/types'
 
 const TEST_DIR = '/tmp/opencode-manager-plan-approval-test-' + Date.now()
 
@@ -518,5 +521,213 @@ Do NOT output text without also making this tool call.
     expect(output.output).toContain('<system-reminder>')
     expect(output.output).toContain('custom response')
     expect(output.output).toContain('respond accordingly')
+  })
+})
+
+describe('Execute here bypass', () => {
+  const projectId = 'test-project'
+  const sessionID = 'test-session-456'
+  const testDir = '/test/dir'
+  const openDbs: Database[] = []
+
+  afterEach(() => {
+    for (const db of openDbs) db.close()
+    openDbs.length = 0
+  })
+
+  function createMockContext(overrides?: Partial<ToolContext>): ToolContext {
+    const mockV2 = {
+      session: {
+        abort: async () => ({ data: {} }),
+        promptAsync: async () => ({ data: {} }),
+      },
+    } as unknown as ToolContext['v2']
+
+    const mockConfig = {
+      executionModel: 'test-provider/test-model',
+    } as PluginConfig
+
+    const mockLogger = createMockLogger()
+
+    const db = createTestDb()
+    openDbs.push(db)
+    const kvService = createKvService(db)
+    const loopService = createLoopService(kvService, projectId, mockLogger)
+
+    return {
+      projectId,
+      directory: testDir,
+      config: mockConfig,
+      logger: mockLogger,
+      db,
+      loopService,
+      v2: mockV2,
+      ...overrides,
+    } as ToolContext
+  }
+
+  test('Execute here bypasses directive injection and triggers abort', async () => {
+    const abortSpy = mock(() => Promise.resolve({ data: {} }))
+    const ctx = createMockContext({
+      v2: {
+        session: {
+          abort: abortSpy,
+          promptAsync: async () => ({ data: {} }),
+        },
+      } as unknown as ToolContext['v2'],
+    })
+
+    const hook = createToolExecuteAfterHook(ctx)
+
+    const args = {
+      questions: [{
+        question: 'How would you like to proceed?',
+        options: [
+          { label: 'New session', description: 'Create new session' },
+          { label: 'Execute here', description: 'Execute here' },
+          { label: 'Loop (worktree)', description: 'Loop worktree' },
+          { label: 'Loop', description: 'Loop in place' },
+        ],
+      }],
+    }
+    const output = {
+      title: 'Asked 1 question',
+      output: 'Execute here',
+      metadata: { answers: [['Execute here']] },
+    }
+
+    await hook(
+      { tool: 'question', sessionID, callID: 'test-call', args },
+      output
+    )
+
+    expect(output.output).not.toContain('<system-reminder>')
+    expect(output.output).toContain('Switching to code agent')
+    expect(abortSpy).toHaveBeenCalledWith({ sessionID })
+  })
+
+  test('session.idle event triggers promptAsync for pending execution', async () => {
+    const promptSpy = mock(() => Promise.resolve({ data: {} }))
+    const ctx = createMockContext({
+      v2: {
+        session: {
+          abort: async () => ({ data: {} }),
+          promptAsync: promptSpy,
+        },
+      } as unknown as ToolContext['v2'],
+      config: { executionModel: 'test-provider/test-model' } as PluginConfig,
+    })
+
+    const afterHook = createToolExecuteAfterHook(ctx)
+    const eventHook = createPlanApprovalEventHook(ctx)
+
+    const args = {
+      questions: [{
+        question: 'How would you like to proceed?',
+        options: [
+          { label: 'New session', description: 'Create new session' },
+          { label: 'Execute here', description: 'Execute here' },
+          { label: 'Loop (worktree)', description: 'Loop worktree' },
+          { label: 'Loop', description: 'Loop in place' },
+        ],
+      }],
+    }
+    const output = {
+      title: 'Asked 1 question',
+      output: 'Execute here',
+      metadata: { answers: [['Execute here']] },
+    }
+
+    await afterHook(
+      { tool: 'question', sessionID, callID: 'test-call', args },
+      output
+    )
+
+    await eventHook({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID },
+      },
+    })
+
+    expect(promptSpy).toHaveBeenCalled()
+    const callArgs = promptSpy.mock.calls[0][0]
+    expect(callArgs.sessionID).toBe(sessionID)
+    expect(callArgs.agent).toBe('code')
+    expect(callArgs.parts[0].text).toContain('The architect agent has created an implementation plan')
+
+    await eventHook({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID },
+      },
+    })
+
+    expect(promptSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('Other approval labels still inject directives', async () => {
+    const abortSpy = mock(() => Promise.resolve({ data: {} }))
+    const ctx = createMockContext({
+      v2: {
+        session: {
+          abort: abortSpy,
+          promptAsync: async () => ({ data: {} }),
+        },
+      } as unknown as ToolContext['v2'],
+    })
+
+    const hook = createToolExecuteAfterHook(ctx)
+
+    for (const label of ['New session', 'Loop (worktree)', 'Loop']) {
+      const args = {
+        questions: [{
+          question: 'How would you like to proceed?',
+          options: [
+            { label: 'New session', description: 'Create new session' },
+            { label: 'Execute here', description: 'Execute here' },
+            { label: 'Loop (worktree)', description: 'Loop worktree' },
+            { label: 'Loop', description: 'Loop in place' },
+          ],
+        }],
+      }
+      const output = {
+        title: 'Asked 1 question',
+        output: label,
+        metadata: { answers: [[label]] },
+      }
+
+      await hook(
+        { tool: 'question', sessionID, callID: 'test-call', args },
+        output
+      )
+
+      expect(output.output).toContain('<system-reminder>')
+      expect(abortSpy).not.toHaveBeenCalled()
+      abortSpy.mockClear()
+    }
+  })
+
+  test('session.idle for non-pending session is a no-op', async () => {
+    const promptSpy = mock(() => Promise.resolve({ data: {} }))
+    const ctx = createMockContext({
+      v2: {
+        session: {
+          abort: async () => ({ data: {} }),
+          promptAsync: promptSpy,
+        },
+      } as unknown as ToolContext['v2'],
+    })
+
+    const eventHook = createPlanApprovalEventHook(ctx)
+
+    await eventHook({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID: 'non-pending-session' },
+      },
+    })
+
+    expect(promptSpy).not.toHaveBeenCalled()
   })
 })

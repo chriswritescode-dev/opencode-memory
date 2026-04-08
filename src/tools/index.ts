@@ -9,7 +9,7 @@ import type { ToolContext } from './types'
 import { isSandboxEnabled } from '../sandbox/context'
 
 export { autoValidateOnLoad } from './health'
-export { createToolExecuteBeforeHook, createToolExecuteAfterHook } from './plan-approval'
+export { createToolExecuteBeforeHook, createToolExecuteAfterHook, createPlanApprovalEventHook } from './plan-approval'
 export { scopeEnum } from './types'
 export type { ToolContext, DimensionMismatchState, InitState } from './types'
 

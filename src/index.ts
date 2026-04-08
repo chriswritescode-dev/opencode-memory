@@ -16,7 +16,7 @@ import { createLogger } from './utils/logger'
 import { createDockerService } from './sandbox/docker'
 import { createSandboxManager } from './sandbox/manager'
 import type { PluginConfig, CompactionConfig } from './types'
-import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad } from './tools'
+import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad, createPlanApprovalEventHook } from './tools'
 import { createSandboxToolBeforeHook, createSandboxToolAfterHook } from './hooks/sandbox-tools'
 import type { DimensionMismatchState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
@@ -247,6 +247,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     const tools = createTools(ctx)
     const toolExecuteBeforeHook = createToolExecuteBeforeHook(ctx)
     const toolExecuteAfterHook = createToolExecuteAfterHook(ctx)
+    const planApprovalEventHook = createPlanApprovalEventHook(ctx)
     const sandboxBeforeHook = createSandboxToolBeforeHook({
       loopService,
       sandboxManager,
@@ -278,6 +279,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         }
         await loopHandler.onEvent(eventInput)
         await sessionHooks.onEvent(eventInput)
+        await planApprovalEventHook(eventInput)
       },
       'tool.execute.before': async (input, output) => {
         const worktree = loopService.resolveWorktreeName(input.sessionID)

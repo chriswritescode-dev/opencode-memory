@@ -365,7 +365,7 @@ describe('createMemoryPlugin', () => {
     const hooks = await plugin(mockInput)
     currentHooks = hooks as { getCleanup?: () => Promise<void> }
 
-    expect(hooks.tool?.['memory-read']?.description).toBe('Search and retrieve project memories')
+    expect(hooks.tool?.['memory-read']?.description).toBe('Lists recent project memories when called with no arguments. Pass a query for semantic search.')
     expect(hooks.tool?.['memory-write']?.description).toBe('Store a new project memory')
     expect(hooks.tool?.['memory-delete']?.description).toBe('Delete a project memory')
   })
