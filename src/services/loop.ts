@@ -178,15 +178,11 @@ export function createLoopService(
   }
 
   function buildAuditPrompt(state: LoopState): string {
-    const taskSummary = state.prompt && state.prompt.length > 200
-      ? `${state.prompt.substring(0, 197)}...`
-      : (state.prompt ?? '')
-
     const branchInfo = state.worktreeBranch ? ` (branch: ${state.worktreeBranch})` : ''
     return [
       `Post-iteration ${String(state.iteration)} code review${branchInfo}.`,
       '',
-      `Task context: ${taskSummary}`,
+      `The full implementation plan is stored in KV. Retrieve it by calling memory-kv-get with key "plan:${state.worktreeName}". Review the code changes against the plan phases and verify per-phase acceptance criteria are met.`,
       '',
       'Review the code changes in this worktree. Focus on bugs, logic errors, missing error handling, and convention violations.',
       'If you find bugs in related code that affect the correctness of this task, report them — even if the buggy code was not directly modified.',

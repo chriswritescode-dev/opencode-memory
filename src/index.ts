@@ -16,7 +16,7 @@ import { createLogger } from './utils/logger'
 import { createDockerService } from './sandbox/docker'
 import { createSandboxManager } from './sandbox/manager'
 import type { PluginConfig, CompactionConfig } from './types'
-import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad } from './tools'
+import { createTools, createToolExecuteBeforeHook, createToolExecuteAfterHook, autoValidateOnLoad, createPlanApprovalEventHook } from './tools'
 import { createSandboxToolBeforeHook, createSandboxToolAfterHook } from './hooks/sandbox-tools'
 import type { DimensionMismatchState, ToolContext } from './tools'
 import type { VecService } from './storage/vec-types'
@@ -247,6 +247,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
     const tools = createTools(ctx)
     const toolExecuteBeforeHook = createToolExecuteBeforeHook(ctx)
     const toolExecuteAfterHook = createToolExecuteAfterHook(ctx)
+    const planApprovalEventHook = createPlanApprovalEventHook(ctx)
     const sandboxBeforeHook = createSandboxToolBeforeHook({
       loopService,
       sandboxManager,
@@ -278,6 +279,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         }
         await loopHandler.onEvent(eventInput)
         await sessionHooks.onEvent(eventInput)
+        await planApprovalEventHook(eventInput)
       },
       'tool.execute.before': async (input, output) => {
         const worktree = loopService.resolveWorktreeName(input.sessionID)
@@ -376,7 +378,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
           text: `<system-reminder>
 Plan mode is active. You MUST NOT make any file edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
 
-You may ONLY: observe, analyze, plan, and use memory tools (memory-read, memory-write, memory-edit, memory-delete, memory-kv-set, memory-kv-get, memory-kv-list, memory-kv-delete), the question tool, memory-plan-execute, and memory-loop.
+You may ONLY: observe, analyze, plan, and use memory tools (memory-read, memory-write, memory-edit, memory-delete, memory-kv-set, memory-kv-get, memory-kv-list, memory-kv-delete, memory-kv-search), the question tool, memory-plan-execute, and memory-loop.
 
 You MUST always present your plan to the user for explicit approval before proceeding. Never execute a plan without approval. Use the question tool to collect approval — never ask for approval via plain text output.
 </system-reminder>`,

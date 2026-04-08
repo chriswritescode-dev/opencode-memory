@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui'
 import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
+import { SyntaxStyle } from '@opentui/core'
 import { readFileSync, existsSync } from 'fs'
 
 // Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
@@ -112,6 +113,55 @@ function readLoopStates(projectId: string): LoopInfo[] {
     return loops
   } catch {
     return []
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
+function readPlan(projectId: string, sessionID: string): string | null {
+  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
+  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
+  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
+
+  if (!existsSync(dbPath)) return null
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true })
+    const now = Date.now()
+    const row = db.prepare('SELECT data FROM project_kv WHERE project_id = ? AND key = ? AND expires_at > ?')
+      .get(projectId, `plan:${sessionID}`, now) as { data: string } | null
+    if (!row) return null
+    const data = row.data
+    if (typeof data === 'string' && data.startsWith('"')) {
+      try { return JSON.parse(data) } catch { return data }
+    }
+    return data
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
+function writePlan(projectId: string, sessionID: string, content: string): boolean {
+  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
+  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
+  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
+
+  if (!existsSync(dbPath)) return false
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath)
+    const now = Date.now()
+    const ttl = 7 * 24 * 60 * 60 * 1000
+    db.prepare(
+      'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(projectId, `plan:${sessionID}`, JSON.stringify(content), now + ttl, now, now)
+    return true
+  } catch {
+    return false
   } finally {
     try { db?.close() } catch {}
   }
@@ -255,6 +305,67 @@ function truncateMiddle(text: string, maxLength: number): string {
   const start = Math.ceil(keep / 2)
   const end = Math.floor(keep / 2)
   return text.slice(0, start) + '.....' + text.slice(text.length - end)
+}
+
+function PlanViewerDialog(props: {
+  api: TuiPluginApi
+  planContent: string
+  projectId: string
+  sessionId: string
+}) {
+  const theme = () => props.api.theme.current
+  const [editing, setEditing] = createSignal(false)
+  const [content, setContent] = createSignal(props.planContent)
+  let textareaRef: any = null
+
+  const handleSave = () => {
+    const text = textareaRef?.plainText ?? content()
+    const saved = writePlan(props.projectId, props.sessionId, text)
+    props.api.ui.toast({
+      message: saved ? 'Plan saved' : 'Failed to save plan',
+      variant: saved ? 'success' : 'error',
+      duration: 3000,
+    })
+    if (saved) {
+      setContent(text)
+      setEditing(false)
+    }
+  }
+
+  return (
+    <box flexDirection="column" paddingX={2}>
+      <box flexShrink={0} paddingBottom={1} flexDirection="row" gap={2}>
+        <text fg={theme().text}><b>Plan</b></text>
+        <text fg={theme().info} onMouseUp={() => setEditing(e => !e)}>
+          {editing() ? '[view]' : '[edit]'}
+        </text>
+      </box>
+      <Show when={!editing()}>
+        <scrollbox maxHeight="75%" borderStyle="rounded" borderColor={theme().border} paddingX={1}>
+          <markdown
+            content={content()}
+            syntaxStyle={SyntaxStyle.create()}
+            fg={theme().markdownText}
+          />
+        </scrollbox>
+      </Show>
+      <Show when={editing()}>
+        <textarea
+          ref={textareaRef}
+          initialValue={content()}
+          focused={true}
+          maxHeight="75%"
+          paddingX={1}
+        />
+      </Show>
+      <box paddingTop={1} flexShrink={0} flexDirection="row" gap={2}>
+        <Show when={editing()}>
+          <text fg={theme().success} onMouseUp={handleSave}>Save</text>
+        </Show>
+        <text fg={theme().textMuted} onMouseUp={() => props.api.ui.dialog.clear()}>Close (esc)</text>
+      </box>
+    </box>
+  )
 }
 
 function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: () => void }) {
@@ -430,9 +541,10 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: 
   )
 }
 
-function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
+function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions; sessionId?: string }) {
   const [open, setOpen] = createSignal(true)
   const [loops, setLoops] = createSignal<LoopInfo[]>([])
+  const [hasPlan, setHasPlan] = createSignal(false)
   const theme = () => props.api.theme.current
   const directory = props.api.state.path.directory
   const pid = resolveProjectId(directory)
@@ -474,6 +586,11 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
       return bTime.localeCompare(aTime)
     })
     setLoops(visible)
+    
+    if (props.sessionId) {
+      const plan = readPlan(pid, props.sessionId)
+      setHasPlan(plan !== null)
+    }
   }
   
   const unsub = props.api.event.on('session.status', () => {
@@ -513,6 +630,7 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
   })
 
   const hasContent = createMemo(() => {
+    if (hasPlan()) return true
     if (props.opts.showLoops && loops().length > 0) return true
     return false
   })
@@ -530,6 +648,9 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
           </Show>
           <text fg={theme().text}>
             <b>{title()}</b>
+            <Show when={!open() && hasPlan()}>
+              <span style={{ fg: theme().info }}> · plan</span>
+            </Show>
             <Show when={!open() && activeCount() > 0}>
               <span style={{ fg: theme().textMuted }}>
                 {' '}({activeCount()} active)
@@ -537,31 +658,54 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions }) {
             </Show>
           </text>
         </box>
-        <Show when={open() && props.opts.showLoops && loops().length > 0}>
-          <For each={loops()}>
-            {(loop) => (
-              <box
-                flexDirection="row"
-                gap={1}
-                onMouseUp={() => {
-                  if (loop.worktree) {
-                    props.api.ui.dialog.setSize("medium")
-                    props.api.ui.dialog.replace(() => (
-                      <LoopDetailsDialog api={props.api} loop={loop} />
-                    ))
-                  } else {
-                    props.api.route.navigate('session', { sessionID: loop.sessionId })
-                  }
-                }}
-              >
-                <text flexShrink={0} style={{ fg: dot(loop) }}>•</text>
-                <text fg={theme().text} wrapMode="word">
-                  {truncateMiddle(loop.name, 25)}{' '}
-                  <span style={{ fg: theme().textMuted }}>{statusText(loop)}</span>
-                </text>
-              </box>
-            )}
-          </For>
+        <Show when={open()}>
+          <Show when={hasPlan()}>
+            <box
+              flexDirection="row"
+              gap={1}
+              onMouseUp={() => {
+                if (!pid || !props.sessionId) return
+                const plan = readPlan(pid, props.sessionId)
+                if (!plan) {
+                  props.api.ui.toast({ message: 'Plan not found', variant: 'info', duration: 3000 })
+                  return
+                }
+                props.api.ui.dialog.setSize("xlarge")
+                props.api.ui.dialog.replace(() => (
+                  <PlanViewerDialog api={props.api} planContent={plan} projectId={pid} sessionId={props.sessionId!} />
+                ))
+              }}
+            >
+              <text flexShrink={0} style={{ fg: theme().info }}>📋</text>
+              <text fg={theme().text}>Plan</text>
+            </box>
+          </Show>
+          <Show when={props.opts.showLoops && loops().length > 0}>
+            <For each={loops()}>
+              {(loop) => (
+                <box
+                  flexDirection="row"
+                  gap={1}
+                  onMouseUp={() => {
+                    if (loop.worktree) {
+                      props.api.ui.dialog.setSize("medium")
+                      props.api.ui.dialog.replace(() => (
+                        <LoopDetailsDialog api={props.api} loop={loop} />
+                      ))
+                    } else {
+                      props.api.route.navigate('session', { sessionID: loop.sessionId })
+                    }
+                  }}
+                >
+                  <text flexShrink={0} style={{ fg: dot(loop) }}>•</text>
+                  <text fg={theme().text} wrapMode="word">
+                    {truncateMiddle(loop.name, 25)}{' '}
+                    <span style={{ fg: theme().textMuted }}>{statusText(loop)}</span>
+                  </text>
+                </box>
+              )}
+            </For>
+          </Show>
         </Show>
       </box>
     </Show>
@@ -640,11 +784,44 @@ const tui: TuiPlugin = async (api) => {
     ]
   })
 
+  api.command.register(() => {
+    const route = api.route.current
+    if (route.name !== 'session') return []
+
+    const directory = api.state.path.directory
+    const pid = resolveProjectId(directory)
+    if (!pid) return []
+
+    const sessionID = (route.params as any)?.sessionID as string | undefined
+    if (!sessionID) return []
+
+    const plan = readPlan(pid, sessionID)
+    if (!plan) return []
+
+    return [{
+      title: 'Memory: View plan',
+      value: 'memory.plan.view',
+      description: 'View cached plan for this session',
+      category: 'Memory',
+      onSelect: () => {
+        const freshPlan = readPlan(pid, sessionID)
+        if (!freshPlan) {
+          api.ui.toast({ message: 'No plan found for this session', variant: 'info', duration: 3000 })
+          return
+        }
+        api.ui.dialog.setSize("xlarge")
+        api.ui.dialog.replace(() => (
+          <PlanViewerDialog api={api} planContent={freshPlan} projectId={pid} sessionId={sessionID} />
+        ))
+      },
+    }]
+  })
+
   api.slots.register({
     order: 150,
     slots: {
-      sidebar_content() {
-        return <Sidebar api={api} opts={opts} />
+      sidebar_content(_ctx, slotProps) {
+        return <Sidebar api={api} opts={opts} sessionId={slotProps.session_id} />
       },
     },
   })

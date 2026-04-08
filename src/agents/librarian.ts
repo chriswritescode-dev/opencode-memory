@@ -8,7 +8,7 @@ export const librarianAgent: AgentDefinition = {
   description: 'Expert agent for managing project memory - storing and retrieving conventions, decisions, context, and session progress',
   mode: 'subagent',
   tools: {
-    exclude: ['memory-plan-execute', 'memory-loop', 'memory-health', 'memory-kv-set', 'memory-kv-get', 'memory-kv-list', 'memory-kv-delete'],
+    exclude: ['memory-plan-execute', 'memory-loop', 'memory-health', 'memory-kv-set', 'memory-kv-get', 'memory-kv-list', 'memory-kv-delete', 'memory-kv-search'],
   },
   systemPrompt: `You are a memory management agent. Your purpose is to capture, organize, and retrieve knowledge that persists across sessions.
 

@@ -5,24 +5,35 @@ import { parseModelString, retryWithModelFallback } from '../utils/model-fallbac
 const z = tool.schema
 
 export function createPlanExecuteTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const { directory, config, logger, v2 } = ctx
+  const { directory, config, logger, v2, kvService, projectId } = ctx
 
   return {
     'memory-plan-execute': tool({
       description: 'Send the plan to the Code agent for execution. By default creates a new session. Set inPlace to true to switch to the code agent in the current session (plan is already in context).',
       args: {
-        plan: z.string().describe('The full implementation plan to send to the Code agent'),
+        plan: z.string().optional().describe('The full implementation plan. If omitted, reads from KV key "plan:current".'),
         title: z.string().describe('Short title for the session (shown in session list)'),
         inPlace: z.boolean().optional().default(false).describe('Execute in the current session, instead of creating a new session'),
       },
       execute: async (args, context) => {
         logger.log(`memory-plan-execute: ${args.inPlace ? 'switching to code agent' : 'creating session'} titled "${args.title}"`)
 
+        let planText = args.plan
+        if (!planText) {
+          const planKey = `plan:${context.sessionID}`
+          const cached = kvService.get<string>(projectId, planKey)
+          if (!cached) {
+            return 'No plan found. Cache the plan to KV key "plan:current" before calling this tool, or pass it directly as the plan argument.'
+          }
+          planText = typeof cached === 'string' ? cached : JSON.stringify(cached, null, 2)
+          kvService.delete(projectId, planKey)
+        }
+
         const sessionTitle = args.title.length > 60 ? `${args.title.substring(0, 57)}...` : args.title
         const executionModel = parseModelString(config.executionModel)
 
         if (args.inPlace) {
-          const inPlacePrompt = `The architect agent has created an implementation plan in this conversation above. You are now the code agent taking over this session. Your job is to execute the plan — edit files, run commands, create tests, and implement every phase. Do NOT just describe or summarize the changes. Actually make them.\n\nPlan reference: ${args.plan}`
+          const inPlacePrompt = `The architect agent has created an implementation plan in this conversation above. You are now the code agent taking over this session. Your job is to execute the plan — edit files, run commands, create tests, and implement every phase. Do NOT just describe or summarize the changes. Actually make them.\n\nPlan reference: ${planText}`
 
           const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
             () => v2.session.promptAsync({
@@ -50,8 +61,6 @@ export function createPlanExecuteTools(ctx: ToolContext): Record<string, ReturnT
           const modelInfo = actualModel ? `${actualModel.providerID}/${actualModel.modelID}` : 'default'
           return `Switching to code agent for execution.\n\nTitle: ${sessionTitle}\nModel: ${modelInfo}\nAgent: code`
         }
-
-        const planText = args.plan
 
         const createResult = await v2.session.create({
           title: sessionTitle,

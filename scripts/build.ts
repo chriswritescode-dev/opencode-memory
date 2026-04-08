@@ -26,7 +26,7 @@ const result = await Bun.build({
   outdir: join(__dirname, '..', 'dist'),
   target: 'node',
   plugins: [solidPlugin],
-  external: ['@opentui/solid', '@opencode-ai/plugin/tui', 'solid-js'],
+  external: ['@opentui/solid', '@opentui/core', '@opencode-ai/plugin/tui', 'solid-js'],
 })
 
 if (!result.success) {

@@ -27,7 +27,7 @@ interface LoopSetupOptions {
   onLoopStarted?: (worktreeName: string) => void
 }
 
-async function setupLoop(
+export async function setupLoop(
   ctx: ToolContext,
   options: LoopSetupOptions,
 ): Promise<string> {
@@ -242,23 +242,34 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
     'memory-loop': tool({
       description: 'Execute a plan using an iterative development loop. Default runs in current directory. Set worktree to true for isolated git worktree.',
       args: {
-        plan: z.string().describe('The full implementation plan to send to the Code agent'),
+        plan: z.string().optional().describe('The full implementation plan. If omitted, reads from KV key "plan:current".'),
         title: z.string().describe('Short title for the session (shown in session list)'),
         worktree: z.boolean().optional().default(false).describe('Run in isolated git worktree instead of current directory'),
       },
-      execute: async (args, _context) => {
+      execute: async (args, context) => {
         if (config.loop?.enabled === false) {
           return 'Loops are disabled in plugin config. Use memory-plan-execute instead.'
         }
 
         logger.log(`memory-loop: creating worktree for plan="${args.title}"`)
 
+        let planText = args.plan
+        if (!planText) {
+          const planKey = `plan:${context.sessionID}`
+          const cached = ctx.kvService.get<string>(ctx.projectId, planKey)
+          if (!cached) {
+            return 'No plan found. Cache the plan to KV key "plan:current" before calling this tool, or pass it directly as the plan argument.'
+          }
+          planText = typeof cached === 'string' ? cached : JSON.stringify(cached, null, 2)
+          ctx.kvService.delete(ctx.projectId, planKey)
+        }
+
         const sessionTitle = args.title.length > 60 ? `${args.title.substring(0, 57)}...` : args.title
         const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
         const audit = config.loop?.defaultAudit ?? true
 
         return setupLoop(ctx, {
-          prompt: args.plan,
+          prompt: planText,
           sessionTitle: `Loop: ${sessionTitle}`,
           completionSignal: DEFAULT_COMPLETION_SIGNAL,
           maxIterations: config.loop?.defaultMaxIterations ?? 0,

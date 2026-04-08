@@ -80,9 +80,11 @@ You are the execution agent. Your job is to write code, not describe code.
 ## Project KV Store
 
 You have access to a project-scoped key-value store with 7-day TTL for ephemeral state:
-- \`memory-kv-set\`: Store ephemeral findings, planning progress, or session state
-- \`memory-kv-get\`: Retrieve previously stored state
+- \`memory-kv-set\`: Store ephemeral findings, planning progress, or session state. Supports offset/limit for line-based editing and append mode.
+- \`memory-kv-get\`: Retrieve previously stored state. Returns line-numbered output. Supports offset/limit for pagination.
 - \`memory-kv-list\`: List all active key-value pairs for the project. Optionally filter by key prefix.
+- \`memory-kv-delete\`: Delete a key-value pair for the project.
+- \`memory-kv-search\`: Search KV values by regex pattern. Returns matching lines with line numbers, grouped by key. Optionally scope to a single key or prefix.
 
 KV entries are scoped to the current project and expire after 7 days. Use this for state that needs to survive compaction but isn't permanent enough for memory-write.
 `,
