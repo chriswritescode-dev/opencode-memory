@@ -33,11 +33,11 @@ The local embedding model downloads automatically on install. For API-based embe
 - **Automatic Deduplication** - Prevents duplicates via exact match and semantic similarity detection
 - **Compaction Context Injection** - Injects conventions and decisions into session compaction for seamless continuity
 - **Automatic Memory Injection** - Injects relevant project memories into user messages via semantic search with distance filtering and caching
-- **Project KV Store** - Ephemeral key-value storage with TTL management for project state
+- **Session Plan Storage** - Session-scoped plan storage with 7-day TTL for managing implementation plans
 - **Bundled Agents** - Ships with Code, Architect, Auditor and Librarian agents preconfigured for memory-aware workflows
-- **CLI Tools** - Export, import, list, stats, cleanup, upgrade, status, and cancel commands via `ocm-mem` binary
+- **CLI Tools** - Export, import, list, stats, cleanup, upgrade, status, cancel, and restart commands via `ocm-mem` binary
 - **Dimension Mismatch Detection** - Detects embedding model changes and guides recovery via reindex
-- **Iterative Development Loops** - Autonomous coding/auditing loop with worktree isolation, session rotation, stall detection, and review finding persistence
+- **Iterative Development Loops** - Autonomous coding/auditing loop with optional worktree isolation, session rotation, stall detection, and review finding persistence
 - **Docker Sandbox** - Run loops inside isolated Docker containers with bind-mounted project directory, automatic container lifecycle, and selective tool routing (bash, glob, grep)
 
 ## Agents
@@ -66,7 +66,7 @@ The architect agent operates in read-only mode (`temperature: 0.0`, all edits de
 | `memory-write` | Store a new project memory |
 | `memory-edit` | Update an existing project memory |
 | `memory-delete` | Delete a project memory by ID |
-| `memory-health` | Health check, reindex, or upgrade the plugin to latest version |
+| `memory-health` | Check plugin health, reindex embeddings, upgrade plugin, or reload without restart |
 | `plan-execute` | Create a new Code session and send an approved plan as the first prompt |
 
 ### Plan Tools
@@ -91,21 +91,22 @@ Review finding storage for persisting audit results across session rotations.
 
 ### Loop Tools
 
-Iterative development loops with automatic auditing. Runs in an isolated git worktree by default, or in the current directory with `inPlace`.
+Iterative development loops with automatic auditing. Defaults to current directory execution; set `worktree: true` for isolated git worktree.
 
 | Tool | Description |
 |------|-------------|
-| `memory-loop-cancel` | Cancel an active loop by worktree name |
-| `memory-loop-status` | Check status of loops. Supports `restart` to resume inactive loops. |
-| `memory-loop` | Execute an architect plan using an iterative loop. Supports `inPlace` parameter. |
+| `memory-loop` | Execute a plan using an iterative development loop. Default runs in current directory. Set `worktree` to true for isolated git worktree. |
+| `memory-loop-cancel` | Cancel an active memory loop by worktree name |
+| `memory-loop-status` | List all active memory loops or get detailed status by worktree name. Supports `restart` to resume inactive loops. |
 
 ## Slash Commands
 
 | Command | Description | Agent |
 |---------|-------------|-------|
 | `/review` | Run a code review on current changes | auditor (subtask) |
-| `/loop` | Start a loop (delegates to memory-loop) | code |
-| `/cancel-loop` | Cancel the active loop | code |
+| `/memory-loop` | Start a memory iterative development loop in a worktree | code |
+| `/memory-loop-status` | Check status of all active memory loops | code |
+| `/memory-loop-cancel` | Cancel the active memory loop | code |
 
 ## CLI
 
@@ -223,6 +224,19 @@ Cancel a loop by worktree name.
 ```bash
 ocm-mem cancel my-worktree-name
 ocm-mem cancel --project my-project my-worktree-name
+```
+
+| Flag | Description |
+|------|-------------|
+| `--project, -p <name>` | Project name or SHA (auto-detected from git) |
+
+#### restart
+
+Restart a loop by worktree name.
+
+```bash
+ocm-mem restart my-worktree-name
+ocm-mem restart --project my-project my-worktree-name
 ```
 
 | Flag | Description |
@@ -498,7 +512,7 @@ After the architect presents a summary, the user approves via one of four execut
 - **New session** — Creates a new Code session and sends the plan as the initial prompt. The architect session is aborted and the TUI navigates to the new session.
 - **Execute here** — The architect session is aborted and the code agent takes over the same session immediately with the plan.
 - **Loop (worktree)** — Creates an isolated git worktree and launches an iterative coding/auditing loop. When `config.sandbox.mode` is `"docker"`, the loop automatically uses Docker sandbox.
-- **Loop** — Same as Loop (worktree) but runs in the current directory without worktree isolation.
+- **Loop (in-place)** — Runs an iterative coding/auditing loop in the current directory without worktree isolation.
 
 Execution is immediate — there are no additional LLM calls between approval and execution. The system intercepts the user's approval answer, reads the cached plan from KV, and dispatches it programmatically to the code agent. The architect never processes the approval response.
 
@@ -529,7 +543,7 @@ Audit findings survive session rotation via the **review store**. The auditor st
 
 ### Worktree Isolation
 
-By default, loops run in an isolated git worktree with their own branch (e.g., `opencode/loop-<slug>`). On completion, changes are auto-committed and the worktree is removed (branch preserved for later merge). Set `worktree: false` to run in the current directory instead (skips worktree creation, auto-commit, and cleanup).
+Loops default to current directory execution. Set `worktree: true` to run in an isolated git worktree with its own branch (e.g., `opencode/loop-<slug>`). In worktree mode, changes are auto-committed and the worktree is removed on completion (branch preserved for later merge).
 
 ### Auditor Integration
 
@@ -550,15 +564,15 @@ Loops use `loop.model` if set, falling back to `executionModel`, then the platfo
 
 ### Management
 
-- **Slash commands**: `/loop` to start, `/cancel-loop` to cancel
-- **Tools**: `memory-loop-status` for checking progress (with restart capability)
+- **Slash commands**: `/memory-loop` to start, `/memory-loop-cancel` to cancel
+- **Tools**: `memory-loop` to start with parameters, `memory-loop-status` for checking progress (with restart capability), `memory-loop-cancel` to cancel
 - **CLI**: `ocm-mem status` and `ocm-mem cancel` for loop management
 
 ### Completion and Termination
 
 The loop completes when the Code agent outputs the completion promise. It auto-terminates after `maxIterations` (if set) or after 3 consecutive errors.
 
-By default, loops run in an isolated git worktree. Set `inPlace: true` to run in the current directory instead (skips worktree creation, auto-commit, and cleanup).
+By default, loops run in the current directory. Set `worktree: true` to run in an isolated git worktree instead (enables worktree creation, auto-commit, and cleanup on completion).
 
 See the [full documentation](https://chriswritescode-dev.github.io/opencode-memory/features/memory/#loop) for details on worktree management, model configuration, and termination conditions.
 
@@ -602,7 +616,7 @@ memory-loop with worktree: true
 ```
 
 Sandbox is automatically enabled when `config.sandbox.mode` is set to `"docker"` and the loop uses `worktree: true`. The loop:
-1. Creates a git worktree (if `worktree: true`)
+1. Creates a git worktree
 2. Starts a Docker container with the worktree directory bind-mounted at `/workspace`
 3. Redirects `bash`, `glob`, and `grep` tool calls into the container
 4. Cleans up the container on loop completion or cancellation
