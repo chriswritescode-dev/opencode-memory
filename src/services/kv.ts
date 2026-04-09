@@ -13,7 +13,7 @@ export interface KvEntry {
 
 export interface KvService {
   get<T = unknown>(projectId: string, key: string): T | null
-  set<T = unknown>(projectId: string, key: string, data: T, ttlMs?: number): void
+  set<T = unknown>(projectId: string, key: string, data: T): void
   delete(projectId: string, key: string): void
   list(projectId: string): KvEntry[]
   listByPrefix(projectId: string, prefix: string): KvEntry[]
@@ -21,6 +21,7 @@ export interface KvService {
 
 export function createKvService(db: Database, _logger?: Logger, defaultTtlMs?: number): KvService {
   const queries = createKvQuery(db)
+  const ttlMs = defaultTtlMs ?? DEFAULT_TTL_MS
 
   return {
     get<T = unknown>(projectId: string, key: string): T | null {
@@ -33,8 +34,8 @@ export function createKvService(db: Database, _logger?: Logger, defaultTtlMs?: n
       }
     },
 
-    set<T = unknown>(projectId: string, key: string, data: T, ttlMs?: number): void {
-      const expiresAt = Date.now() + (ttlMs ?? defaultTtlMs ?? DEFAULT_TTL_MS)
+    set<T = unknown>(projectId: string, key: string, data: T): void {
+      const expiresAt = Date.now() + ttlMs
       const jsonData = JSON.stringify(data)
       queries.set(projectId, key, jsonData, expiresAt)
     },

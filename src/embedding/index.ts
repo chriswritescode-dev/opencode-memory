@@ -81,7 +81,7 @@ export function createEmbeddingService(provider: EmbeddingProvider, cache: Cache
         results[index] = embedding
 
         const cacheKey = `emb:${hash}`
-        await cache.set(cacheKey, embedding, 86400)
+        await cache.set(cacheKey, embedding)
       }
     }
 

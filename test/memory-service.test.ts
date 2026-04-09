@@ -45,8 +45,8 @@ function createMockCache(): CacheService {
       }
       return entry.value as T
     },
-    async set<T>(key: string, value: T, ttlSeconds = 0): Promise<void> {
-      const expiry = ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : 0
+    async set<T>(key: string, value: T): Promise<void> {
+      const expiry = Date.now() + 604800000 // 7 days
       store.set(key, { value, expiry })
     },
     async del(key: string): Promise<void> {

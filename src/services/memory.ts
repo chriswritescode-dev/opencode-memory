@@ -279,10 +279,11 @@ export interface CreateMemoryServiceOptions {
   provider: EmbeddingProvider
   vec: VecService
   logger?: Logger
+  cacheTtlSeconds?: number
 }
 
 export async function createMemoryService(options: CreateMemoryServiceOptions): Promise<MemoryService> {
-  const cache = createCacheService()
+  const cache = createCacheService(options.cacheTtlSeconds)
   const embeddingService = createEmbeddingService(options.provider, cache)
 
   return new MemoryService({

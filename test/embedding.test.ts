@@ -202,7 +202,7 @@ describe('createEmbeddingService', () => {
         }
         return null
       },
-      async set<T>(key: string, value: T, _ttlSeconds?: number): Promise<void> {
+      async set<T>(key: string, value: T): Promise<void> {
         cacheStore.set(key, value)
       },
       async del(_key: string): Promise<void> {},
@@ -237,7 +237,7 @@ describe('createEmbeddingService', () => {
       async get<T>(key: string): Promise<T | null> {
         return cacheStore.get(key) as T | null
       },
-      async set<T>(key: string, value: T, _ttlSeconds?: number): Promise<void> {
+      async set<T>(key: string, value: T): Promise<void> {
         cacheStore.set(key, value)
       },
       async del(_key: string): Promise<void> {},
@@ -275,7 +275,7 @@ describe('createEmbeddingService', () => {
       async get<T>(_key: string): Promise<T | null> {
         return null
       },
-      async set<T>(_key: string, _value: T, _ttlSeconds?: number): Promise<void> {},
+      async set<T>(_key: string, _value: T): Promise<void> {},
       async del(_key: string): Promise<void> {},
       async invalidatePattern(_pattern: string): Promise<void> {},
     }
