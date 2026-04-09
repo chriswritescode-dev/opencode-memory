@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui'
 import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
-import { SyntaxStyle } from '@opentui/core'
+import { SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { readFileSync, existsSync } from 'fs'
 
 // Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
@@ -332,7 +332,7 @@ function PlanViewerDialog(props: {
   const [content, setContent] = createSignal(props.planContent)
   const [selectingMode, setSelectingMode] = createSignal(false)
   const [selectedMode, setSelectedMode] = createSignal<string | null>(null)
-  let textareaRef: any = null
+  let textareaRef: TextareaRenderable | undefined
 
   const handleSave = () => {
     const text = textareaRef?.plainText ?? content()
@@ -564,7 +564,9 @@ function PlanViewerDialog(props: {
       
       <Show when={editing()}>
         <textarea
-          ref={textareaRef}
+          ref={(value) => {
+            textareaRef = value
+          }}
           initialValue={content()}
           focused={true}
           maxHeight="75%"
@@ -1101,7 +1103,7 @@ const tui: TuiPlugin = async (api) => {
     const pid = resolveProjectId(directory)
     if (!pid) return []
 
-    const sessionID = (route.params as any)?.sessionID as string | undefined
+    const sessionID = (route.params as { sessionID?: string })?.sessionID
     if (!sessionID) return []
 
     const plan = readPlan(pid, sessionID)

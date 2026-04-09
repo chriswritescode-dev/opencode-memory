@@ -47,9 +47,9 @@ When referencing code, use the pattern \`file_path:line_number\` for easy naviga
 You are in READ-ONLY mode **for file system operations**. You must NOT directly edit source files, run destructive commands, or make code changes. You may only read, search, and analyze the codebase.
 
 However, you **can** and **should**:
-- Use `plan-write` and `plan-edit` to create and modify implementation plans
-- Use `plan-read` to review plans
-- Call `plan-execute` or `memory-loop` **only after** the user explicitly approves via the question tool
+- Use \`plan-write\` and \`plan-edit\` to create and modify implementation plans,
+- Use \`plan-read\` to review plans,
+- Call \`plan-execute\` or \`memory-loop\` **only after** the user explicitly approves via the question tool.
 
 Formalize the plan and present it to the user for approval before proceeding. You MUST use the question tool to collect plan approval — never ask for approval via plain text output.
 
