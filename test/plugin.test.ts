@@ -126,6 +126,38 @@ describe('createMemoryPlugin', () => {
     expect(hooks.tool?.['memory-delete']).toBeDefined()
   })
 
+  test('Plugin does NOT register shadow glob or grep tools', async () => {
+    const config: PluginConfig = {
+      dataDir: `${testDir}/.opencode/memory`,
+      embedding: {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+        apiKey: 'test-key',
+      },
+      sandbox: {
+        mode: 'docker',
+      },
+    }
+
+    const plugin = createMemoryPlugin(config)
+
+    const mockInput = {
+      directory: testDir,
+      worktree: testDir,
+      client: {} as never,
+      project: { id: TEST_PROJECT_ID } as never,
+      serverUrl: new URL('http://localhost:5551'),
+      $: {} as never,
+    }
+
+    const hooks = await plugin(mockInput)
+    currentHooks = hooks as { getCleanup?: () => Promise<void> }
+
+    expect(hooks.tool).toBeDefined()
+    expect(hooks.tool?.['glob']).toBeUndefined()
+    expect(hooks.tool?.['grep']).toBeUndefined()
+  })
+
   test('Plugin registers all expected hooks', async () => {
     const config: PluginConfig = {
       dataDir: `${testDir}/.opencode/memory`,
@@ -475,7 +507,7 @@ describe('messages.transform hook', () => {
     })
     const text = userMsg.parts[1].text as string
     expect(text).toContain('system-reminder')
-    expect(text).toContain('MUST NOT make any file edits')
+    expect(text).toContain('READ-ONLY mode')
   })
 
   test('does NOT inject for non-architect agents', async () => {
