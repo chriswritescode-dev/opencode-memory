@@ -44,12 +44,12 @@ The local embedding model downloads automatically on install. For API-based embe
 
 The plugin bundles four agents that integrate with the memory system:
 
-| Agent | ID | Mode | Description |
-|-------|----|------|-------------|
-| **code** | `ocm-code` | primary | Primary coding agent with memory awareness. Checks memory before unfamiliar code, stores architectural decisions and conventions as it works. Delegates planning operations to @librarian subagent. |
-| **architect** | `ocm-architect` | primary | Read-only planning agent. Researches the codebase, delegates to @librarian for broad knowledge retrieval, designs implementation plans, then hands off to code via `memory-plan-execute`. |
-| **librarian** | `ocm-librarian` | subagent | Expert agent for managing project memory. Handles post-compaction memory extraction and contradiction resolution. |
-| **auditor** | `ocm-auditor` | subagent | Read-only code auditor with access to project memory for convention-aware reviews. Invoked via Task tool to review diffs, commits, branches, or PRs against stored conventions and decisions. |
+| Agent | Mode | Description |
+|-------|------|-------------|
+| **code** | primary | Primary coding agent with memory awareness. Checks memory before unfamiliar code, stores architectural decisions and conventions as it works. Delegates planning operations to @librarian subagent. |
+| **architect** | primary | Read-only planning agent. Researches the codebase, delegates to @librarian for broad knowledge retrieval, designs implementation plans, then hands off to code via `plan-execute`. |
+| **librarian** | subagent | Expert agent for managing project memory. Handles post-compaction memory extraction and contradiction resolution. |
+| **auditor** | subagent | Read-only code auditor with access to project memory for convention-aware reviews. Invoked via Task tool to review diffs, commits, branches, or PRs against stored conventions and decisions. |
 
 The auditor agent is a read-only subagent (`temperature: 0.0`) that can read memory but cannot write, edit, or delete memories or execute plans. It is invoked by other agents via the Task tool to review code changes against stored project conventions and decisions.
 
@@ -67,19 +67,27 @@ The architect agent operates in read-only mode (`temperature: 0.0`, all edits de
 | `memory-edit` | Update an existing project memory |
 | `memory-delete` | Delete a project memory by ID |
 | `memory-health` | Health check, reindex, or upgrade the plugin to latest version |
-| `memory-plan-execute` | Create a new Code session and send an approved plan as the first prompt |
+| `plan-execute` | Create a new Code session and send an approved plan as the first prompt |
 
-### Project KV Tools
+### Plan Tools
 
-Ephemeral key-value storage for project state with automatic TTL-based expiration.
+Session-scoped plan storage with 7-day TTL for managing implementation plans.
 
 | Tool | Description |
 |------|-------------|
-| `memory-kv-set` | Store a value with optional TTL (default 7 days). Supports offset/limit for line-based editing and append mode. |
-| `memory-kv-get` | Retrieve a value by key. Returns line-numbered output. Supports offset/limit for pagination. |
-| `memory-kv-list` | List all active KV entries for the project. Optionally filter by key prefix. |
-| `memory-kv-delete` | Delete a key-value pair by key. |
-| `memory-kv-search` | Search KV values by regex pattern. Returns matching lines with line numbers, grouped by key. Optionally scope to a single key or prefix. |
+| `plan-write` | Store the entire plan content. Auto-resolves key to `plan:{sessionID}`. |
+| `plan-edit` | Edit the plan by finding `old_string` and replacing with `new_string`. |
+| `plan-read` | Retrieve the plan. Supports pagination with offset/limit and pattern search. |
+
+### Review Tools
+
+Review finding storage for persisting audit results across session rotations.
+
+| Tool | Description |
+|------|-------------|
+| `review-write` | Store a review finding with file, line, severity, and description. Auto-injects branch field. |
+| `review-read` | Retrieve review findings. Filter by file path or search by regex pattern. |
+| `review-delete` | Delete a review finding by file and line. |
 
 ### Loop Tools
 
@@ -360,7 +368,7 @@ When enabled, logs are written to the specified file with timestamps. The log fi
 - `messagesTransform.debug` - Enable debug logging for messages transform (default: `false`)
 
 #### Execution
-- `executionModel` - Model override for plan execution sessions, format: `provider/model` (e.g. `anthropic/claude-haiku-3-5-20241022`). When set, `memory-plan-execute` uses this model for the new Code session. When empty or omitted, OpenCode's default model is used (typically the `model` field from `opencode.json`). **Recommended:** Set this to a fast, cheap model (e.g. Haiku or MiniMax) and use a smart model (e.g. Opus) for the Architect session — planning needs reasoning, execution needs speed.
+- `executionModel` - Model override for plan execution sessions, format: `provider/model` (e.g. `anthropic/claude-haiku-3-5-20241022`). When set, `plan-execute` uses this model for the new Code session. When empty or omitted, OpenCode's default model is used (typically the `model` field from `opencode.json`). **Recommended:** Set this to a fast, cheap model (e.g. Haiku or MiniMax) and use a smart model (e.g. Opus) for the Architect session — planning needs reasoning, execution needs speed.
 
 #### Loop
 - `loop.enabled` - Enable iterative development loops (default: `true`)
@@ -513,10 +521,10 @@ Each iteration runs in a **fresh session** to keep context small and prioritize 
 
 ### Review Finding Persistence
 
-Audit findings survive session rotation via the **KV store**. The auditor stores each bug and warning as a KV entry with key `review-finding:<file>:<line>` containing severity, description, and status. At the start of each audit:
+Audit findings survive session rotation via the **review store**. The auditor stores each bug and warning using `review-write` with file, line, severity, and description. At the start of each audit:
 
-- Existing findings are retrieved via `memory-kv-list` with prefix `review-finding:`
-- Resolved findings are deleted
+- Existing findings are retrieved via `review-read`
+- Resolved findings are deleted via `review-delete`
 - Unresolved findings are carried forward into the review
 
 ### Worktree Isolation
@@ -525,7 +533,7 @@ By default, loops run in an isolated git worktree with their own branch (e.g., `
 
 ### Auditor Integration
 
-After each coding iteration, the auditor agent reviews changes against project conventions and stored review findings. Findings are persisted as `review-finding:` KV entries scoped to the loop's branch. Outstanding findings block completion, and a minimum audit count (`minAudits`, default: `1`) must be met before the completion promise is honored.
+After each coding iteration, the auditor agent reviews changes against project conventions and stored review findings. Findings are persisted via `review-write` scoped to the loop's branch. Outstanding findings block completion, and a minimum audit count (`minAudits`, default: `1`) must be met before the completion promise is honored.
 
 ### Stall Detection
 
@@ -538,7 +546,7 @@ Loops use `loop.model` if set, falling back to `executionModel`, then the platfo
 ### Safety
 
 - `git push` is denied inside active loop sessions
-- Tools like `question`, `memory-plan-execute`, and `memory-loop` are blocked to prevent recursive loops and keep execution autonomous
+- Tools like `question`, `plan-execute`, and `memory-loop` are blocked to prevent recursive loops and keep execution autonomous
 
 ### Management
 

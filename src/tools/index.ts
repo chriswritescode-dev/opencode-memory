@@ -1,6 +1,7 @@
 import { tool } from '@opencode-ai/plugin'
 import { createMemoryTools } from './memory'
-import { createKvTools } from './kv'
+import { createReviewTools } from './review'
+import { createPlanTools } from './plan-kv'
 import { createHealthTools } from './health'
 import { createPlanExecuteTools } from './plan-execute'
 import { createLoopTools } from './loop'
@@ -17,7 +18,8 @@ export function createTools(ctx: ToolContext): Record<string, ReturnType<typeof 
   const sandboxEnabled = isSandboxEnabled(ctx.config, ctx.sandboxManager)
   return {
     ...createMemoryTools(ctx),
-    ...createKvTools(ctx),
+    ...createReviewTools(ctx),
+    ...createPlanTools(ctx),
     ...createHealthTools(ctx),
     ...createPlanExecuteTools(ctx),
     ...createLoopTools(ctx),

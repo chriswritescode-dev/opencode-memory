@@ -182,13 +182,13 @@ export function createLoopService(
     return [
       `Post-iteration ${String(state.iteration)} code review${branchInfo}.`,
       '',
-      `The full implementation plan is stored in KV. Retrieve it by calling memory-kv-get with key "plan:${state.worktreeName}". Review the code changes against the plan phases and verify per-phase acceptance criteria are met.`,
+      `The full implementation plan is stored in the plan store. Retrieve it by calling plan-read. Review the code changes against the plan phases and verify per-phase acceptance criteria are met.`,
       '',
       'Review the code changes in this worktree. Focus on bugs, logic errors, missing error handling, and convention violations.',
       'If you find bugs in related code that affect the correctness of this task, report them — even if the buggy code was not directly modified.',
       'If everything looks good, state "No issues found." clearly.',
       '',
-      'Before reviewing, retrieve all existing review findings by calling the memory-kv-list tool with the prefix parameter set to "review-finding:". For each existing finding, verify whether the issue has been resolved in the current code. Delete resolved findings by calling the memory-kv-delete tool. Report any unresolved findings that still apply.',
+      'Before reviewing, retrieve all existing review findings by calling the review-read tool. For each existing finding, verify whether the issue has been resolved in the current code. Delete resolved findings by calling the review-delete tool. Report any unresolved findings that still apply.',
       '',
       'This is an automated loop — do not direct the agent to "create a plan" or "present for approval." Just report findings directly.',
     ].join('\n')

@@ -97,7 +97,7 @@ describe('Plan Approval Tool Interception', () => {
             output.output = `${output.output}\n\n[Programmatic dispatch - no directive]`
           } else {
             // Custom answer fallback
-            output.output = `${output.output}\n\n<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (memory-plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>`
+            output.output = `${output.output}\n\n<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>`
           }
         }
       }
@@ -108,7 +108,7 @@ describe('Plan Approval Tool Interception', () => {
 
     const LOOP_BLOCKED_TOOLS: Record<string, string> = {
       question: 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
-      'memory-plan-execute': 'The memory-plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
+      'plan-execute': 'The plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
       'memory-loop': 'The memory-loop tool is not available during a memory loop. Focus on executing the current plan.',
     }
 
@@ -136,7 +136,7 @@ describe('Plan Approval Tool Interception', () => {
 
     expect(output.output).toContain('New session')
     expect(output.output).not.toContain('<system-reminder>')
-    expect(output.output).not.toContain('memory-plan-execute')
+    expect(output.output).not.toContain('plan-execute')
   })
 
   test('Detects plan approval question and handles "Execute here" with abort', () => {
@@ -302,13 +302,13 @@ describe('Plan Approval Tool Interception', () => {
     expect(output.output).toBe('test')
   })
 
-  test('Loop blocking works for memory-plan-execute tool', () => {
+  test('Loop blocking works for plan-execute tool', () => {
     const output = { title: '', output: 'test', metadata: {} }
 
-    simulateToolExecuteAfter('memory-plan-execute', {}, output, true)
+    simulateToolExecuteAfter('plan-execute', {}, output, true)
 
     expect(output.title).toBe('Tool blocked')
-    expect(output.output).toContain('memory-plan-execute tool is not available')
+    expect(output.output).toContain('plan-execute tool is not available')
   })
 
   test('Loop blocking works for memory-loop tool', () => {
@@ -332,7 +332,7 @@ describe('Plan Approval Tool Interception', () => {
   test('Loop blocking only applies when loop is active', () => {
     const output = { title: '', output: 'test', metadata: {} }
 
-    simulateToolExecuteAfter('memory-plan-execute', {}, output, false)
+    simulateToolExecuteAfter('plan-execute', {}, output, false)
 
     expect(output.title).toBe('')
     expect(output.output).toBe('test')

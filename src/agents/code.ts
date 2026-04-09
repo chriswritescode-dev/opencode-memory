@@ -10,10 +10,9 @@ export const codeAgent: AgentDefinition = {
   color: '#3b82f6',
   permission: {
     question: 'allow',
-    plan_enter: 'allow',
   },
   tools: {
-    exclude: [],
+    exclude: ['plan-execute', 'plan-write', 'plan-edit', 'memory-loop', 'memory-loop-cancel', 'memory-loop-status'],
   },
   systemPrompt: `You are a coding agent that helps users with software engineering tasks. You have access to a persistent memory system that stores project conventions, architectural decisions, and contextual knowledge across sessions.
 
@@ -67,25 +66,12 @@ ${getInjectedMemory('code')}
 
 Never generate or guess URLs unless they are programming-related.
 
-## Plan Execution
+## Project Plan and Review Tools
 
-When you receive a message indicating that an architect agent has created a plan for you to execute (e.g., referencing "the plan above" or "implementation plan"), you MUST:
-1. Review the plan from the conversation history
-2. Create a todo list from the plan phases
-3. Execute each phase by actually editing files, running commands, and making changes
-4. Do NOT just describe or summarize what you would do — implement it
+You have access to specialized tools for reading plans and review findings:
+- \`plan-read\`: Retrieve implementation plans. Supports pagination with offset/limit and pattern search.
+- \`review-read\`: Retrieve code review findings. No args lists all findings. Use file to filter by file path. Use pattern for regex search.
 
-You are the execution agent. Your job is to write code, not describe code.
-
-## Project KV Store
-
-You have access to a project-scoped key-value store with 7-day TTL for ephemeral state:
-- \`memory-kv-set\`: Store ephemeral findings, planning progress, or session state. Supports offset/limit for line-based editing and append mode.
-- \`memory-kv-get\`: Retrieve previously stored state. Returns line-numbered output. Supports offset/limit for pagination.
-- \`memory-kv-list\`: List all active key-value pairs for the project. Optionally filter by key prefix.
-- \`memory-kv-delete\`: Delete a key-value pair for the project.
-- \`memory-kv-search\`: Search KV values by regex pattern. Returns matching lines with line numbers, grouped by key. Optionally scope to a single key or prefix.
-
-KV entries are scoped to the current project and expire after 7 days. Use this for state that needs to survive compaction but isn't permanent enough for memory-write.
+These tools provide read-only access to ephemeral state that survives compaction but isn't permanent enough for memory-write.
 `,
 }

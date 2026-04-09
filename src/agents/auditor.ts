@@ -9,7 +9,7 @@ export const auditorAgent: AgentDefinition = {
   mode: 'subagent',
   temperature: 0.0,
   tools: {
-    exclude: ['memory-plan-execute', 'memory-loop', 'memory-health', 'memory-delete', 'memory-write', 'memory-edit'],
+    exclude: ['plan-execute', 'memory-loop', 'memory-health', 'memory-delete', 'memory-write', 'memory-edit', 'plan-write', 'plan-edit', 'plan-read'],
   },
   systemPrompt: `You are a code auditor with access to project memory. You are invoked by other agents to review code changes and return actionable findings.
 
@@ -133,39 +133,30 @@ If a memory seems outdated, flag it for the calling agent.
 
 ## Persisting Findings
 
-After completing a review, store each **bug** and **warning** finding in the project KV store so it can be retrieved in subsequent reviews. Do NOT store suggestions — only actionable issues.
+After completing a review, store each **bug** and **warning** finding using the \`review-write\` tool. Do NOT store suggestions — only actionable issues.
 
-Use the memory-kv-set tool with a structured key and JSON value:
+Use \`review-write\` with these arguments:
+- \`file\`: The file path where the finding is located
+- \`line\`: The line number of the finding
+- \`severity\`: "bug" or "warning"
+- \`description\`: Clear description of the issue
+- \`scenario\`: The specific conditions under which this issue manifests
+- \`status\`: "open" (default) or other status
 
-**Key pattern**: \`review-finding:<file_path>:<line_number>\`
-**Value**: JSON object with the finding details. The \`branch\` field is auto-set by the tool — you do not need to include it.
+The tool automatically injects the branch field and stores the finding with the current date.
 
-Example:
-\`\`\`json
-{
-  "severity": "bug",
-  "file": "src/services/auth.ts",
-  "line": 45,
-  "description": "Missing null check on user.session before accessing .token — throws TypeError when session expires mid-request.",
-  "scenario": "User's session expires between the auth check and token access on line 45.",
-  "status": "open",
-  "date": "2026-03-07"
-}
-\`\`\`
-
-The KV store upserts by key, so storing a finding for the same file:line automatically updates the previous entry. No dedup checks needed.
-
-When a previously open finding has been addressed by the current changes, **delete it** using the memory-kv-delete tool with the same key. Do not re-store resolved findings — removing them keeps the KV store clean and avoids extending the TTL on stale data.
+When a previously open finding has been addressed by the current changes, **delete it** using the \`review-delete\` tool with the file and line arguments. Do not re-store resolved findings — removing them keeps the store clean.
 
 Findings expire after 7 days automatically. If an issue persists, the next review will re-discover it.
 
 ## Retrieving Past Findings
 
 At the start of every review, before analyzing the diff:
-1. Use the memory-kv-list tool with prefix \`review-finding:\` to get all active findings for the project
-2. Use memory-kv-search with prefix \`review-finding:\` to locate findings relevant to files in the current diff
-3. If open findings exist for files being changed, include them under a "### Previously Identified Issues" heading before new findings
-4. Check if any previously open findings have been addressed by the current changes — if so, delete them via the memory-kv-delete tool with the same key
+1. Use \`review-read\` with no arguments to get all active findings for the project
+2. Use \`review-read\` with the \`file\` argument to filter findings to a specific file
+3. Use \`review-read\` with the \`pattern\` argument for regex search across findings
+4. If open findings exist for files being changed, include them under a "### Previously Identified Issues" heading before new findings
+5. Check if any previously open findings have been addressed by the current changes — if so, delete them via the \`review-delete\` tool
 
 ${getInjectedMemory('auditor')}
 `,

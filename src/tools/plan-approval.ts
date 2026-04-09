@@ -7,7 +7,7 @@ import { DEFAULT_COMPLETION_SIGNAL } from '../services/loop'
 
 const LOOP_BLOCKED_TOOLS: Record<string, string> = {
   question: 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
-  'memory-plan-execute': 'The memory-plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
+  'plan-execute': 'The plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
   'memory-loop': 'The memory-loop tool is not available during a memory loop. Focus on executing the current plan.',
 }
 
@@ -77,8 +77,8 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
             const planKey = `plan:${input.sessionID}`
             const planCached = kvService.get<string>(projectId, planKey)
             if (!planCached) {
-              output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is cached to KV key "plan:current" before approval.`
-              logger.error('Plan approval: plan not found in KV for "Execute here"')
+              output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is written via plan-write before approval.`
+              logger.error('Plan approval: plan not found for "Execute here"')
               return
             }
             const planText = typeof planCached === 'string' ? planCached : JSON.stringify(planCached, null, 2)
@@ -105,8 +105,8 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
           const planKey = `plan:${input.sessionID}`
           const planCached = kvService.get<string>(projectId, planKey)
           if (!planCached) {
-            output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is cached to KV key "plan:current" before approval.`
-            logger.error('Plan approval: plan not found in KV')
+            output.output = `${output.output}\n\nError: No cached plan found. Please ensure the plan is written via plan-write before approval.`
+            logger.error('Plan approval: plan not found')
             return
           }
           
@@ -199,7 +199,7 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
           }
           
           // Custom answer fallback
-          output.output = `${output.output}\n\n<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (memory-plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>`
+          output.output = `${output.output}\n\n<system-reminder>\nThe user provided a custom response instead of selecting a predefined option. Review their answer and respond accordingly. If they want to proceed with execution, use the appropriate tool (plan-execute or memory-loop) based on their intent. If they want to cancel or revise the plan, help them with that instead.\n</system-reminder>`
           logger.log(`Plan approval: detected custom answer`)
         }
       }

@@ -242,13 +242,13 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
     'memory-loop': tool({
       description: 'Execute a plan using an iterative development loop. Default runs in current directory. Set worktree to true for isolated git worktree.',
       args: {
-        plan: z.string().optional().describe('The full implementation plan. If omitted, reads from KV key "plan:current".'),
+        plan: z.string().optional().describe('The full implementation plan. If omitted, reads from the session plan store.'),
         title: z.string().describe('Short title for the session (shown in session list)'),
         worktree: z.boolean().optional().default(false).describe('Run in isolated git worktree instead of current directory'),
       },
       execute: async (args, context) => {
         if (config.loop?.enabled === false) {
-          return 'Loops are disabled in plugin config. Use memory-plan-execute instead.'
+          return 'Loops are disabled in plugin config. Use plan-execute instead.'
         }
 
         logger.log(`memory-loop: creating worktree for plan="${args.title}"`)
@@ -258,7 +258,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
           const planKey = `plan:${context.sessionID}`
           const cached = ctx.kvService.get<string>(ctx.projectId, planKey)
           if (!cached) {
-            return 'No plan found. Cache the plan to KV key "plan:current" before calling this tool, or pass it directly as the plan argument.'
+            return 'No plan found. Write the plan via plan-write before calling this tool, or pass it directly as the plan argument.'
           }
           planText = typeof cached === 'string' ? cached : JSON.stringify(cached, null, 2)
           ctx.kvService.delete(ctx.projectId, planKey)

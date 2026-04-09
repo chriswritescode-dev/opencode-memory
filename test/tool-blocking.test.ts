@@ -105,27 +105,27 @@ describe('Tool Blocking Logic', () => {
 
   describe('Blocked tools list', () => {
     test('includes question tool', () => {
-      const blockedTools = ['question', 'memory-plan-execute', 'memory-loop']
+      const blockedTools = ['question', 'plan-execute', 'memory-loop']
       expect(blockedTools).toContain('question')
     })
 
-    test('includes memory-plan-execute tool', () => {
-      const blockedTools = ['question', 'memory-plan-execute', 'memory-loop']
-      expect(blockedTools).toContain('memory-plan-execute')
+    test('includes plan-execute tool', () => {
+      const blockedTools = ['question', 'plan-execute', 'memory-loop']
+      expect(blockedTools).toContain('plan-execute')
     })
 
     test('includes memory-loop tool', () => {
-      const blockedTools = ['question', 'memory-plan-execute', 'memory-loop']
+      const blockedTools = ['question', 'plan-execute', 'memory-loop']
       expect(blockedTools).toContain('memory-loop')
     })
 
     test('does not include memory-read tool', () => {
-      const blockedTools = ['question', 'memory-plan-execute', 'memory-loop']
+      const blockedTools = ['question', 'plan-execute', 'memory-loop']
       expect(blockedTools).not.toContain('memory-read')
     })
 
     test('does not include memory-write tool', () => {
-      const blockedTools = ['question', 'memory-plan-execute', 'memory-loop']
+      const blockedTools = ['question', 'plan-execute', 'memory-loop']
       expect(blockedTools).not.toContain('memory-write')
     })
   })
@@ -134,19 +134,19 @@ describe('Tool Blocking Logic', () => {
     test('question tool has appropriate error message', () => {
       const messages: Record<string, string> = {
         'question': 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
-        'memory-plan-execute': 'The memory-plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
+        'plan-execute': 'The plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
         'memory-loop': 'The memory-loop tool is not available during a memory loop. Focus on executing the current plan.',
       }
       expect(messages['question']).toContain('question tool is not available')
     })
 
-    test('memory-plan-execute tool has appropriate error message', () => {
+    test('plan-execute tool has appropriate error message', () => {
       const messages: Record<string, string> = {
         'question': 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
-        'memory-plan-execute': 'The memory-plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
+        'plan-execute': 'The plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
         'memory-loop': 'The memory-loop tool is not available during a memory loop. Focus on executing the current plan.',
       }
-      expect(messages['memory-plan-execute']).toContain('memory-plan-execute tool is not available')
+      expect(messages['plan-execute']).toContain('plan-execute tool is not available')
     })
   })
 })

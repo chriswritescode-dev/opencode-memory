@@ -376,11 +376,17 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
         userMessage.parts.push({
           type: 'text',
           text: `<system-reminder>
-Plan mode is active. You MUST NOT make any file edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
+You are in READ-ONLY mode for file system operations. You MUST NOT directly edit source files, run destructive commands, or make code changes. You may only read, search, and analyze the codebase.
 
-You may ONLY: observe, analyze, plan, and use memory tools (memory-read, memory-write, memory-edit, memory-delete, memory-kv-set, memory-kv-get, memory-kv-list, memory-kv-delete, memory-kv-search), the question tool, memory-plan-execute, and memory-loop.
+However, you CAN and SHOULD:
+- Use \`plan-write\` to write the plan
+- Use \`plan-edit\` to make targeted updates to the plan
+- Use \`plan-read\` to review the plan
+- Use \`plan-execute\` or \`memory-loop\` ONLY AFTER:
+  1. The plan has been written via \`plan-write\`
+  2. The user explicitly approves via the question tool
 
-You MUST always present your plan to the user for explicit approval before proceeding. Never execute a plan without approval. Use the question tool to collect approval — never ask for approval via plain text output.
+You MUST always write the plan via \`plan-write\` and present a summary to the user for explicit approval before proceeding. The user can review the full plan via the TUI plan viewer. Never execute a plan without approval. Use the question tool to collect approval — never ask for approval via plain text output.
 </system-reminder>`,
           synthetic: true,
         })
