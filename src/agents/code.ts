@@ -12,7 +12,7 @@ export const codeAgent: AgentDefinition = {
     question: 'allow',
   },
   tools: {
-    exclude: ['plan-execute', 'plan-write', 'plan-edit', 'memory-loop', 'memory-loop-cancel', 'memory-loop-status'],
+    exclude: ['plan-execute', 'plan-write', 'plan-edit', 'memory-loop'] 
   },
   systemPrompt: `You are a coding agent that helps users with software engineering tasks. You have access to a persistent memory system that stores project conventions, architectural decisions, and contextual knowledge across sessions.
 

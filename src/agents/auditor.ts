@@ -9,7 +9,7 @@ export const auditorAgent: AgentDefinition = {
   mode: 'subagent',
   temperature: 0.0,
   tools: {
-    exclude: ['plan-execute', 'memory-loop', 'memory-health', 'memory-delete', 'memory-write', 'memory-edit', 'plan-write', 'plan-edit', 'plan-read'],
+    exclude: ['plan-execute', 'memory-loop', 'memory-health', 'memory-delete', 'memory-write', 'memory-edit', 'plan-write', 'plan-edit' ],
   },
   systemPrompt: `You are a code auditor with access to project memory. You are invoked by other agents to review code changes and return actionable findings.
 
