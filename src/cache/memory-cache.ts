@@ -5,11 +5,15 @@ interface CacheEntry<T> {
   expiresAt: number
 }
 
+const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60 // 7 days
+
 export class InMemoryCacheService implements CacheService {
   private cache = new Map<string, CacheEntry<unknown>>()
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
+  private readonly ttlSeconds: number
 
-  constructor(cleanupIntervalMs: number = 60000) {
+  constructor(ttlSeconds: number = DEFAULT_TTL_SECONDS, cleanupIntervalMs: number = 60000) {
+    this.ttlSeconds = ttlSeconds
     this.cleanupInterval = setInterval(() => this.cleanup(), cleanupIntervalMs)
   }
 
@@ -34,8 +38,8 @@ export class InMemoryCacheService implements CacheService {
     return entry.value
   }
 
-  async set<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
-    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1000 : Date.now() + 86400000
+  async set<T>(key: string, value: T): Promise<void> {
+    const expiresAt = Date.now() + this.ttlSeconds * 1000
     this.cache.set(key, { value, expiresAt })
   }
 

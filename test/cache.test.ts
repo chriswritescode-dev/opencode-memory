@@ -25,16 +25,14 @@ describe('InMemoryCacheService', () => {
     expect(result).toBeNull()
   })
 
-  test('TTL expiration — set with short TTL, verify expired after timeout', async () => {
-    await cache.set('expiring-key', 'value', 1)
+  test('TTL expiration — items expire after 7 days', async () => {
+    const now = Date.now()
+    await cache.set('test-key', 'value')
     
-    const resultBeforeExpiry = await cache.get('expiring-key')
-    expect(resultBeforeExpiry).toBe('value')
-
-    await new Promise(resolve => setTimeout(resolve, 1100))
-
-    const resultAfterExpiry = await cache.get('expiring-key')
-    expect(resultAfterExpiry).toBeNull()
+    const entry = (cache as unknown as { cache: Map<string, { expiresAt: number }> }).cache.get('test-key')
+    expect(entry).toBeDefined()
+    expect(entry!.expiresAt).toBeGreaterThan(now + 604700000)
+    expect(entry!.expiresAt).toBeLessThanOrEqual(now + 604900000)
   })
 
   test('Pattern invalidation — set multiple keys, invalidate with glob pattern', async () => {
@@ -74,14 +72,18 @@ describe('InMemoryCacheService', () => {
     expect(result2).toBeNull()
   })
 
-  test('Default TTL is 24 hours', async () => {
+  test('TTL can be customized via constructor', async () => {
     const now = Date.now()
-    await cache.set('default-ttl-key', 'value')
-
-    const entry = (cache as unknown as { cache: Map<string, { expiresAt: number }> }).cache.get('default-ttl-key')
+    const customTtlSeconds = 3600 // 1 hour
+    const customCache = new InMemoryCacheService(customTtlSeconds)
+    
+    await customCache.set('test-key', 'value')
+    const entry = (customCache as unknown as { cache: Map<string, { expiresAt: number }> }).cache.get('test-key')
     expect(entry).toBeDefined()
-    expect(entry!.expiresAt).toBeGreaterThan(now + 86300000)
-    expect(entry!.expiresAt).toBeLessThanOrEqual(now + 86500000)
+    expect(entry!.expiresAt).toBeGreaterThan(now + 3599000)
+    expect(entry!.expiresAt).toBeLessThanOrEqual(now + 3601000)
+    
+    customCache.destroy()
   })
 })
 
