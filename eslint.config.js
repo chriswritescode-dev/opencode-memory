@@ -11,13 +11,13 @@ export default tseslint.config(
       solid: solidPlugin,
     },
     languageOptions: {
+      parser: tseslint.parser,
       parserOptions: {
         projectService: {
           allowDefaultProject: ["scripts/*.ts", "scripts/*.js", "test/*.ts"],
         },
         tsconfigRootDir: import.meta.dirname,
       },
-      parser: tseslint.parser,
     },
     rules: {
       "@typescript-eslint/no-unused-vars": [
@@ -49,6 +49,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/**", "node_modules/**", "*.d.ts", "test/**"],
+    ignores: ["dist/**", "node_modules/**", "*.d.ts", "test/**", ".sbx/**"],
   }
 );

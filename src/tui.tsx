@@ -3,14 +3,6 @@ import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plug
 import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
 import { SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { readFileSync, existsSync } from 'fs'
-
-// Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
-// This duplication is intentional to avoid circular dependencies
-const LOOP_PERMISSION_RULESET = [
-  { permission: '*', pattern: '*', action: 'allow' as const },
-  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
-  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
-]
 import { homedir, platform } from 'os'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -19,6 +11,16 @@ import { VERSION } from './version'
 import { compareVersions } from './utils/upgrade'
 import { fetchSessionStats, type SessionStats } from './utils/session-stats'
 import { slugify } from './utils/logger'
+import { extractPlanTitle, PLAN_EXECUTION_LABELS, matchExecutionLabel } from './utils/plan-execution'
+import { launchFreshLoop } from './utils/loop-launch'
+
+// Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
+// This duplication is intentional to avoid circular dependencies
+const LOOP_PERMISSION_RULESET = [
+  { permission: '*', pattern: '*', action: 'allow' as const },
+  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
+  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
+]
 
 type TuiOptions = {
   sidebar: boolean
@@ -166,18 +168,6 @@ function writePlan(projectId: string, sessionID: string, content: string): boole
   } finally {
     try { db?.close() } catch {}
   }
-}
-
-
-
-function extractPlanTitle(planContent: string): string {
-  const headingMatch = planContent.match(/^#+\s+(.+)$/m)
-  if (headingMatch?.[1]) {
-    const title = headingMatch[1].trim()
-    return title.length > 60 ? `${title.substring(0, 57)}...` : title
-  }
-  const firstLine = planContent.split('\n')[0]?.trim() ?? 'Implementation Plan'
-  return firstLine.length > 60 ? `${firstLine.substring(0, 57)}...` : firstLine
 }
 
 function cancelLoop(projectId: string, loopName: string): string | null {
@@ -330,8 +320,6 @@ function PlanViewerDialog(props: {
   const [editing, setEditing] = createSignal(false)
   const [executing, setExecuting] = createSignal(false)
   const [content, setContent] = createSignal(props.planContent)
-  const [selectingMode, setSelectingMode] = createSignal(false)
-  const [selectedMode, setSelectedMode] = createSignal<string | null>(null)
   let textareaRef: TextareaRenderable | undefined
 
   const handleSave = () => {
@@ -345,6 +333,21 @@ function PlanViewerDialog(props: {
     if (saved) {
       setContent(text)
       setEditing(false)
+    }
+  }
+
+  function getModeDescription(label: string): string {
+    switch (label) {
+      case 'New session':
+        return 'Create a new session and send the plan to the code agent'
+      case 'Execute here':
+        return 'Execute the plan in the current session using the code agent'
+      case 'Loop (worktree)':
+        return 'Execute using iterative development loop in an isolated git worktree'
+      case 'Loop':
+        return 'Execute using iterative development loop in the current directory'
+      default:
+        return ''
     }
   }
 
@@ -363,8 +366,11 @@ function PlanViewerDialog(props: {
       return
     }
 
-    switch (mode.toLowerCase()) {
-      case 'new session': {
+    // Use canonical label matching instead of fragile string comparison
+    const matchedLabel = matchExecutionLabel(mode)
+    
+    switch (matchedLabel) {
+      case 'New session': {
         props.api.ui.dialog.clear()
         props.api.ui.toast({
           message: 'Creating new session for plan execution...',
@@ -430,7 +436,7 @@ function PlanViewerDialog(props: {
         break
       }
       
-      case 'execute here': {
+      case 'Execute here': {
         props.api.ui.dialog.clear()
         props.api.ui.toast({
           message: 'Switching to code agent for plan execution...',
@@ -463,10 +469,9 @@ function PlanViewerDialog(props: {
         break
       }
       
-      case 'loop (worktree)':
-      case 'loop': {
-        const isWorktree = mode.toLowerCase() === 'loop (worktree)'
-        const worktreeName = slugify(title)
+      case 'Loop (worktree)':
+      case 'Loop': {
+        const isWorktree = matchedLabel === 'Loop (worktree)'
         
         props.api.ui.dialog.clear()
         props.api.ui.toast({
@@ -475,33 +480,33 @@ function PlanViewerDialog(props: {
           duration: 3000,
         })
 
-        // Store plan in KV for loop
-        const dbPath = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share', 'opencode', 'memory', 'memory.db')
-        if (existsSync(dbPath)) {
-          let db: Database | null = null
-          try {
-            db = new Database(dbPath)
-            const now = Date.now()
-            const ttl = 7 * 24 * 60 * 60 * 1000
-            
-            // Store plan with worktree name key
-            db.prepare(
-              'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-            ).run(pid, `plan:${worktreeName}`, JSON.stringify(planText), now + ttl, now, now)
-            
-            // Delete from old session
-            db.prepare('DELETE FROM project_kv WHERE project_id = ? AND key = ?').run(pid, `plan:${props.sessionId}`)
-          } catch {}
-          finally {
-            try { db?.close() } catch {}
-          }
-        }
-        
-        // Setup loop via KV pattern - the loop service will pick it up
-        // This mimics what plan-approval.ts does
+        // Use fresh loop launch helper instead of restartLoop
+        // This creates a new loop session rather than requiring preexisting state
         try {
-          const loopSessionId = await restartLoop(pid, worktreeName, props.api)
+          const loopSessionId = await launchFreshLoop({
+            planText,
+            title,
+            directory,
+            projectId: pid,
+            isWorktree,
+            api: props.api,
+          })
+          
           if (loopSessionId) {
+            // Delete plan from old session after successful launch
+            const dbPath = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share', 'opencode', 'memory', 'memory.db')
+            if (existsSync(dbPath)) {
+              let db: Database | null = null
+              try {
+                db = new Database(dbPath)
+                db.prepare('DELETE FROM project_kv WHERE project_id = ? AND key = ?').run(pid, `plan:${props.sessionId}`)
+              } catch {}
+              finally {
+                try { db?.close() } catch {}
+              }
+            }
+            
+            const worktreeName = slugify(title)
             props.api.ui.toast({
               message: isWorktree ? `Loop started in worktree: ${worktreeName}` : `Loop started: ${worktreeName}`,
               variant: 'success',
@@ -528,32 +533,34 @@ function PlanViewerDialog(props: {
     }
   }
 
+
+
   return (
     <box flexDirection="column" paddingX={2}>
       <box flexShrink={0} paddingBottom={1} flexDirection="row" gap={2}>
         <text fg={theme().text}><b>Plan</b></text>
         <text 
           fg={executing() ? theme().textMuted : editing() ? theme().text : theme().info} 
-          onMouseUp={() => { setEditing(false); setExecuting(false); setSelectingMode(false); }}
+          onMouseUp={() => { setEditing(false); setExecuting(false) }}
         >
           [view]
         </text>
         <text 
           fg={editing() ? theme().text : theme().textMuted} 
-          onMouseUp={() => { setEditing(true); setExecuting(false); setSelectingMode(false); }}
+          onMouseUp={() => { setEditing(true); setExecuting(false) }}
         >
           [edit]
         </text>
         <text 
           fg={executing() ? theme().text : theme().textMuted} 
-          onMouseUp={() => { setEditing(false); setExecuting(true); setSelectingMode(false); setSelectedMode(null); }}
+          onMouseUp={() => { setEditing(false); setExecuting(true) }}
         >
           [execute]
         </text>
       </box>
       
       <Show when={!editing() && !executing()}>
-        <scrollbox maxHeight="75%" borderStyle="rounded" borderColor={theme().border} paddingX={1}>
+        <scrollbox minHeight={20} maxHeight="75%" borderStyle="rounded" borderColor={theme().border} paddingX={1}>
           <markdown
             content={content()}
             syntaxStyle={SyntaxStyle.create()}
@@ -569,108 +576,47 @@ function PlanViewerDialog(props: {
           }}
           initialValue={content()}
           focused={true}
+          minHeight={20}
           maxHeight="75%"
           paddingX={1}
         />
       </Show>
       
       <Show when={executing()}>
-        <Show when={!selectingMode()} fallback={
-          <box flexDirection="column" paddingBottom={1} gap={1}>
-            <box>
-              <text fg={theme().text}><b>Select Execution Mode</b></text>
-            </box>
-            <scrollbox maxHeight="60%" borderStyle="rounded" borderColor={theme().border} paddingX={1}>
-              <box flexDirection="column" gap={1} paddingY={1}>
-                <box 
-                  flexDirection="row" 
-                  gap={2} 
-                  paddingY={1}
-                  onMouseUp={() => { setSelectedMode('New session'); setSelectingMode(true); }}
-                >
-                  <text flexShrink={0} fg={theme().info}>•</text>
-                  <text fg={theme().text} flexGrow={1} wrapMode="word">
-                    <b>New session</b>
-                    <br/>
-                    <text fg={theme().textMuted}>Create a new session and send the plan to the code agent</text>
-                  </text>
-                  <text fg={theme().success}>[select]</text>
-                </box>
-                <box 
-                  flexDirection="row" 
-                  gap={2} 
-                  paddingY={1}
-                  onMouseUp={() => { setSelectedMode('Execute here'); setSelectingMode(true); }}
-                >
-                  <text flexShrink={0} fg={theme().info}>•</text>
-                  <text fg={theme().text} flexGrow={1} wrapMode="word">
-                    <b>Execute here</b>
-                    <br/>
-                    <text fg={theme().textMuted}>Execute the plan in the current session using the code agent</text>
-                  </text>
-                  <text fg={theme().success}>[select]</text>
-                </box>
-                <box 
-                  flexDirection="row" 
-                  gap={2} 
-                  paddingY={1}
-                  onMouseUp={() => { setSelectedMode('Loop (worktree)'); setSelectingMode(true); }}
-                >
-                  <text flexShrink={0} fg={theme().info}>•</text>
-                  <text fg={theme().text} flexGrow={1} wrapMode="word">
-                    <b>Loop (worktree)</b>
-                    <br/>
-                    <text fg={theme().textMuted}>Execute using iterative development loop in an isolated git worktree</text>
-                  </text>
-                  <text fg={theme().success}>[select]</text>
-                </box>
-                <box 
-                  flexDirection="row" 
-                  gap={2} 
-                  paddingY={1}
-                  onMouseUp={() => { setSelectedMode('Loop'); setSelectingMode(true); }}
-                >
-                  <text flexShrink={0} fg={theme().info}>•</text>
-                  <text fg={theme().text} flexGrow={1} wrapMode="word">
-                    <b>Loop</b>
-                    <br/>
-                    <text fg={theme().textMuted}>Execute using iterative development loop in the current directory</text>
-                  </text>
-                  <text fg={theme().success}>[select]</text>
-                </box>
-              </box>
-            </scrollbox>
+        <box flexDirection="column" paddingBottom={1} gap={1} minHeight={20} maxHeight="75%">
+          <box paddingBottom={1}>
+            <text fg={theme().text}><b>Select Execution Mode</b></text>
           </box>
-        }>
-          <box paddingTop={1} flexDirection="row" gap={2} alignItems="center">
-            <text fg={theme().text}>
-              Execute with "{selectedMode()}"?
-            </text>
-            <text fg={theme().success} onMouseUp={() => {
-              if (selectedMode()) {
-                handleExecuteMode(selectedMode()!)
-              }
-              setSelectingMode(false)
-              setSelectedMode(null)
-              setExecuting(false)
-            }}>
-              [confirm]
-            </text>
-            <text fg={theme().textMuted} onMouseUp={() => {
-              setSelectingMode(false)
-              setSelectedMode(null)
-            }}>
-              [cancel]
-            </text>
-          </box>
-        </Show>
+            <select
+              focused={true}
+              options={PLAN_EXECUTION_LABELS.map(label => ({
+                name: label,
+                description: getModeDescription(label),
+                value: label,
+              }))}
+              onSelect={(_, option) => {
+                if (option?.value) {
+                  handleExecuteMode(option.value)
+                }
+              }}
+              showDescription={false}
+              itemSpacing={1}
+              wrapSelection={true}
+              textColor={theme().text}
+              focusedTextColor={theme().text}
+              selectedTextColor="#ffffff"
+              selectedBackgroundColor={theme().borderActive}
+              minHeight={12}
+              flexGrow={1}
+            />
+        </box>
       </Show>
       
       <box paddingTop={1} flexShrink={0} flexDirection="row" gap={2}>
         <Show when={editing()}>
           <text fg={theme().success} onMouseUp={handleSave}>Save</text>
         </Show>
-        <Show when={executing() && !selectingMode()}>
+        <Show when={executing()}>
           <text fg={theme().textMuted} onMouseUp={() => setExecuting(false)}>Back to plan</text>
         </Show>
         <text fg={theme().textMuted} onMouseUp={() => props.api.ui.dialog.clear()}>Close (esc)</text>
@@ -959,14 +905,8 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions; sessionId?: strin
           </Show>
           <text fg={theme().text}>
             <b>{title()}</b>
-            <Show when={!open() && hasPlan()}>
-              <span style={{ fg: theme().info }}> · plan</span>
-            </Show>
-            <Show when={!open() && activeCount() > 0}>
-              <span style={{ fg: theme().textMuted }}>
-                {' '}({activeCount()} active)
-              </span>
-            </Show>
+            {!open() && hasPlan() ? <span style={{ fg: theme().info }}> · plan</span> : ''}
+            {!open() && activeCount() > 0 ? <span style={{ fg: theme().textMuted }}>{` (${activeCount()} active)`}</span> : ''}
           </text>
         </box>
         <Show when={open()}>
@@ -1120,7 +1060,7 @@ const tui: TuiPlugin = async (api) => {
           api.ui.toast({ message: 'No plan found for this session', variant: 'info', duration: 3000 })
           return
         }
-        api.ui.dialog.setSize("xlarge")
+        api.ui.dialog.setSize("large")
         api.ui.dialog.replace(() => (
           <PlanViewerDialog api={api} planContent={freshPlan} projectId={pid} sessionId={sessionID} />
         ))

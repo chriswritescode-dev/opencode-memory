@@ -4,6 +4,7 @@ import { parseModelString, retryWithModelFallback } from '../utils/model-fallbac
 import { setupLoop } from './loop'
 import { slugify } from '../utils/logger'
 import { DEFAULT_COMPLETION_SIGNAL } from '../services/loop'
+import { extractPlanTitle, PLAN_EXECUTION_LABELS } from '../utils/plan-execution'
 
 const LOOP_BLOCKED_TOOLS: Record<string, string> = {
   question: 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
@@ -11,7 +12,7 @@ const LOOP_BLOCKED_TOOLS: Record<string, string> = {
   'memory-loop': 'The memory-loop tool is not available during a memory loop. Focus on executing the current plan.',
 }
 
-const PLAN_APPROVAL_LABELS = ['New session', 'Execute here', 'Loop (worktree)', 'Loop']
+const PLAN_APPROVAL_LABELS = PLAN_EXECUTION_LABELS
 
 interface PendingExecution {
   directory: string
@@ -21,17 +22,8 @@ interface PendingExecution {
 
 const pendingExecutions = new Map<string, PendingExecution>()
 
-function extractPlanTitle(planContent: string): string {
-  const headingMatch = planContent.match(/^#+\s+(.+)$/m)
-  if (headingMatch?.[1]) {
-    const title = headingMatch[1].trim()
-    return title.length > 60 ? `${title.substring(0, 57)}...` : title
-  }
-  const firstLine = planContent.split('\n')[0]?.trim() ?? 'Implementation Plan'
-  return firstLine.length > 60 ? `${firstLine.substring(0, 57)}...` : firstLine
-}
-
 export { LOOP_BLOCKED_TOOLS, PLAN_APPROVAL_LABELS }
+export { extractPlanTitle }
 
 export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execute.before'] {
   const { loopService, logger } = ctx
