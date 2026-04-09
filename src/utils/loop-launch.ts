@@ -86,12 +86,12 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
     try {
       db = new Database(dbPath)
       const now = Date.now()
-      const ttl = 7 * 24 * 60 * 60 * 1000
+      const TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
       
       // Store plan with worktree name key
       db.prepare(
         'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(projectId, `plan:${worktreeName}`, JSON.stringify(planText), now + ttl, now, now)
+      ).run(projectId, `plan:${worktreeName}`, JSON.stringify(planText), now + TTL_MS, now, now)
       
       // Store loop state in KV
       const loopState = {
@@ -114,12 +114,12 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
       
       db.prepare(
         'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-      ).run(projectId, `loop:${worktreeName}`, JSON.stringify(loopState), now + ttl, now)
+      ).run(projectId, `loop:${worktreeName}`, JSON.stringify(loopState), now + TTL_MS, now)
       
       // Store session mapping
       db.prepare(
         'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-      ).run(projectId, `loop-session:${sessionId}`, JSON.stringify(worktreeName), now + ttl, now)
+      ).run(projectId, `loop-session:${sessionId}`, JSON.stringify(worktreeName), now + TTL_MS, now)
     } catch {
       // Continue even if DB operations fail
     } finally {

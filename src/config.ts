@@ -1,4 +1,10 @@
 import type { AgentRole, AgentDefinition, AgentConfig } from './agents'
+import { readFileSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const PROMPT_REVIEW = readFileSync(join(__dirname, 'command/template/review.txt'), 'utf-8')
 
 
 const REPLACED_BUILTIN_AGENTS = ['build', 'plan']
@@ -13,10 +19,10 @@ const ENHANCED_BUILTIN_AGENTS: Record<string, { tools: Record<string, boolean> }
 
 const PLUGIN_COMMANDS: Record<string, { template: string; description: string; agent: string; subtask: boolean }> = {
   review: {
-    description: 'Run a code review on current changes',
+    description: 'Run a code review.',
     agent: 'auditor',
     subtask: true,
-    template: 'Review the current code changes. $ARGUMENTS',
+    template: PROMPT_REVIEW,
   },
   'memory-loop': {
     description: 'Start a memory iterative development loop in a worktree',

@@ -26,7 +26,8 @@
     "dist",
     "config.jsonc",
     "scripts",
-    "README.md"
+    "README.md",
+    "src/command/template"
   ],
   "bin": {
     "ocm-mem": "./dist/cli/index.js"

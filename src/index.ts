@@ -66,6 +66,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       provider,
       vec: noopVec,
       logger,
+      cacheTtlSeconds: config.defaultKvTtlMs ? Math.floor(config.defaultKvTtlMs / 1000) : undefined,
     })
 
     if (config.dedupThreshold) {
@@ -182,6 +183,7 @@ export function createMemoryPlugin(config: PluginConfig): Plugin {
       memoryService,
       logger,
       config: memoryInjectionConfig,
+      cacheTtlMs: config.defaultKvTtlMs,
     })
     const injectedMessageIds = new Set<string>()
 

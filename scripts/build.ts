@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, cpSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import solidPlugin from '@opentui/solid/bun-plugin'
@@ -42,5 +42,11 @@ declare const plugin: TuiPluginModule & { id: string };
 export default plugin;
 `
 writeFileSync(join(__dirname, '..', 'dist', 'tui.d.ts'), tuiDtsContent, 'utf-8')
+
+console.log('Copying template files...')
+const srcTemplateDir = join(__dirname, '..', 'src', 'command', 'template')
+const distTemplateDir = join(__dirname, '..', 'dist', 'command', 'template')
+mkdirSync(distTemplateDir, { recursive: true })
+cpSync(srcTemplateDir, distTemplateDir, { recursive: true })
 
 console.log('Build complete!')

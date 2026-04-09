@@ -15,6 +15,7 @@ interface MemoryInjectionDeps {
   memoryService: MemoryService
   logger: Logger
   config?: MemoryInjectionConfig
+  cacheTtlMs?: number
 }
 
 export interface MemoryInjectionHook {
@@ -31,9 +32,9 @@ export function createMemoryInjectionHook(deps: MemoryInjectionDeps): MemoryInje
   const maxResults = config?.maxResults ?? 5
   const distanceThreshold = config?.distanceThreshold ?? 0.5
   const maxTokens = config?.maxTokens ?? 2000
-  const cacheTtlMs = config?.cacheTtlMs ?? 30000
+  const cacheTtlMs = deps.cacheTtlMs ?? 30000
 
-  const cache = new InMemoryCacheService()
+  const cache = new InMemoryCacheService(cacheTtlMs / 1000)
 
   let initialized = false
 
@@ -88,7 +89,7 @@ export function createMemoryInjectionHook(deps: MemoryInjectionDeps): MemoryInje
       }
 
       if (filteredResults.length === 0) {
-        await cache.set(cacheKey, '', cacheTtlMs / 1000)
+        await cache.set(cacheKey, '')
         if (debug) {
           logger.debug('memory-injection: no matching memories found', { projectId })
         }
@@ -134,7 +135,7 @@ export function createMemoryInjectionHook(deps: MemoryInjectionDeps): MemoryInje
         }
       }
 
-      await cache.set(cacheKey, formatted, cacheTtlMs / 1000)
+      await cache.set(cacheKey, formatted)
 
       logger.log(`memory-injection: injected ${filteredResults.length} relevant memories (${tokens} tokens) for query`)
 

@@ -90,6 +90,7 @@ export interface MemoryInjectionConfig {
   maxResults?: number
   distanceThreshold?: number
   maxTokens?: number
+  /** @deprecated Use defaultKvTtlMs in root config instead */
   cacheTtlMs?: number
   debug?: boolean
 }
