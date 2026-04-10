@@ -5,8 +5,9 @@ import type { TuiPluginApi } from '@opencode-ai/plugin/tui'
 
 const TEST_DIR = '/tmp/opencode-manager-loop-launch-test-' + Date.now()
 
-function createTestDb(): Database {
-  const db = new Database(`${TEST_DIR}-${Math.random().toString(36).slice(2)}.db`)
+function createTestDb(): { db: Database; path: string } {
+  const path = `${TEST_DIR}-${Math.random().toString(36).slice(2)}.db`
+  const db = new Database(path)
   db.run(`
     CREATE TABLE IF NOT EXISTS project_kv (
       project_id TEXT NOT NULL,
@@ -19,7 +20,7 @@ function createTestDb(): Database {
     )
   `)
   db.run(`CREATE INDEX IF NOT EXISTS idx_project_kv_expires_at ON project_kv(expires_at)`)
-  return db
+  return { db, path }
 }
 
 function createMockApi(overrides?: Partial<TuiPluginApi>): TuiPluginApi {
@@ -89,12 +90,15 @@ function createMockApi(overrides?: Partial<TuiPluginApi>): TuiPluginApi {
 
 describe('Fresh Loop Launch', () => {
   let db: Database
+  let dbPath: string
   const projectId = 'test-project'
   const planText = '# Test Plan\n\nThis is a test plan for loop execution.'
   const title = 'Test Loop'
 
   beforeEach(() => {
-    db = createTestDb()
+    const result = createTestDb()
+    db = result.db
+    dbPath = result.path
   })
 
   afterEach(() => {
@@ -111,6 +115,7 @@ describe('Fresh Loop Launch', () => {
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
     expect(sessionId).toBeDefined()
@@ -124,18 +129,20 @@ describe('Fresh Loop Launch', () => {
   test('Creates fresh worktree loop session', async () => {
     const mockApi = createMockApi()
     
-    const sessionId = await launchFreshLoop({
+    const result = await launchFreshLoop({
       planText,
       title,
       directory: TEST_DIR,
       projectId,
       isWorktree: true,
       api: mockApi,
+      dbPath,
     })
 
-    expect(sessionId).toBeDefined()
+    expect(result).toBeDefined()
+    expect(result?.sessionId).toBeDefined()
     expect(mockApi.client.worktree.create).toHaveBeenCalledWith({
-      worktreeCreateInput: { name: expect.stringContaining('test-loop') },
+      worktreeCreateInput: { name: 'test-plan' }, // Falls back to title since no Loop Name field
     })
     expect(mockApi.client.session.create).toHaveBeenCalled()
   })
@@ -143,15 +150,18 @@ describe('Fresh Loop Launch', () => {
   test('Persists loop state to KV for in-place loop', async () => {
     const mockApi = createMockApi()
     
-    await launchFreshLoop({
+    const result = await launchFreshLoop({
       planText,
       title,
       directory: TEST_DIR,
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
+    expect(result).toBeDefined()
+    
     // Verify loop state was written to KV
     const loopStateRow = db.prepare(
       'SELECT data FROM project_kv WHERE project_id = ? AND key LIKE ?'
@@ -164,21 +174,27 @@ describe('Fresh Loop Launch', () => {
       expect(state.worktree).toBe(false)
       expect(state.phase).toBe('coding')
       expect(state.prompt).toBe(planText)
+      expect(state.worktreeName).toBe('test-plan') // Falls back to title
     }
   })
 
   test('Persists loop state to KV for worktree loop', async () => {
     const mockApi = createMockApi()
     
-    await launchFreshLoop({
+    const result = await launchFreshLoop({
       planText,
       title,
       directory: TEST_DIR,
       projectId,
       isWorktree: true,
       api: mockApi,
+      dbPath,
     })
 
+    expect(result).toBeDefined()
+    expect(result?.isWorktree).toBe(true)
+    expect(result?.worktreeName).toBe('test-plan')
+    
     const loopStateRow = db.prepare(
       'SELECT data FROM project_kv WHERE project_id = ? AND key LIKE ?'
     ).get(projectId, 'loop:%') as { data: string } | null
@@ -195,23 +211,26 @@ describe('Fresh Loop Launch', () => {
   test('Persists session mapping to KV', async () => {
     const mockApi = createMockApi()
     
-    const sessionId = await launchFreshLoop({
+    const result = await launchFreshLoop({
       planText,
       title,
       directory: TEST_DIR,
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
+    expect(result).toBeDefined()
+    
     const sessionRow = db.prepare(
       'SELECT data FROM project_kv WHERE project_id = ? AND key = ?'
-    ).get(projectId, `loop-session:${sessionId}`) as { data: string } | null
+    ).get(projectId, `loop-session:${result!.sessionId}`) as { data: string } | null
 
     expect(sessionRow).toBeDefined()
     if (sessionRow) {
       const worktreeName = JSON.parse(sessionRow.data)
-      expect(worktreeName).toContain('test-loop')
+      expect(worktreeName).toBe('test-plan')
     }
   })
 
@@ -225,6 +244,7 @@ describe('Fresh Loop Launch', () => {
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
     const planRow = db.prepare(
@@ -259,6 +279,7 @@ describe('Fresh Loop Launch', () => {
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
     expect(sessionId).toBeNull()
@@ -274,12 +295,143 @@ describe('Fresh Loop Launch', () => {
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
     expect(mockApi.client.session.promptAsync).toHaveBeenCalled()
     const callArgs = (mockApi.client.session.promptAsync as any).mock.calls[0][0]
     expect(callArgs.parts[0].text).toContain('ALL_PHASES_COMPLETE')
     expect(callArgs.parts[0].text).toContain(planText)
+  })
+
+  test('Uses explicit Loop Name field when present', async () => {
+    const mockApi = createMockApi()
+    const planWithLoopName = '# Test Plan\n\nLoop Name: custom-name\n\nContent here.'
+    
+    const result = await launchFreshLoop({
+      planText: planWithLoopName,
+      title: 'Test Plan',
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    expect(result?.loopName).toBe('custom-name')
+    expect(result?.worktreeName).toBe('custom-name')
+  })
+
+  test('Returns structured LaunchResult with all fields', async () => {
+    const mockApi = createMockApi()
+    
+    const result = await launchFreshLoop({
+      planText,
+      title,
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: true,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    expect(result?.sessionId).toBeDefined()
+    expect(result?.loopName).toBeDefined()
+    expect(result?.worktreeName).toBeDefined()
+    expect(result?.isWorktree).toBe(true)
+    expect(result?.worktreeDir).toBeDefined()
+    expect(result?.worktreeBranch).toBeDefined()
+  })
+
+  test('Persists loop state immediately with schema-valid structure', async () => {
+    const mockApi = createMockApi()
+    
+    const result = await launchFreshLoop({
+      planText,
+      title,
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    
+    // Verify loop: key exists immediately after launch
+    const loopKey = `loop:${result!.worktreeName}`
+    const loopRow = db.prepare(
+      'SELECT data, expires_at, created_at, updated_at FROM project_kv WHERE project_id = ? AND key = ?'
+    ).get(projectId, loopKey) as { data: string; expires_at: number; created_at: number; updated_at: number } | null
+
+    expect(loopRow).toBeDefined()
+    if (loopRow) {
+      const state = JSON.parse(loopRow.data)
+      // Verify schema-required fields
+      expect(state.active).toBe(true)
+      expect(state.sessionId).toBe(result?.sessionId)
+      expect(state.worktreeName).toBe(result?.worktreeName)
+      expect(state.worktreeDir).toBeDefined()
+      expect(state.iteration).toBe(1)
+      expect(state.phase).toBe('coding')
+      expect(state.prompt).toBe(planText)
+      expect(state.worktree).toBe(false)
+      expect(state.startedAt).toBeDefined()
+      expect(loopRow.expires_at).toBeDefined()
+    }
+  })
+
+
+
+  test('Persists session mapping immediately after launch', async () => {
+    const mockApi = createMockApi()
+    
+    const result = await launchFreshLoop({
+      planText,
+      title,
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    
+    // Verify loop-session: key exists immediately after launch
+    const sessionKey = `loop-session:${result!.sessionId}`
+    const sessionRow = db.prepare(
+      'SELECT data FROM project_kv WHERE project_id = ? AND key = ?'
+    ).get(projectId, sessionKey) as { data: string } | null
+
+    expect(sessionRow).toBeDefined()
+    if (sessionRow) {
+      const storedWorktreeName = JSON.parse(sessionRow.data)
+      expect(storedWorktreeName).toBe(result?.worktreeName)
+    }
+  })
+
+  test('Sanitizes loop names with special characters', async () => {
+    const mockApi = createMockApi()
+    const planWithSpecialChars = '# Test Plan\n\nLoop Name: API v2.0 Migration!\n\nContent.'
+    
+    const result = await launchFreshLoop({
+      planText: planWithSpecialChars,
+      title: 'Test Plan',
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    // Display name preserves original formatting
+    expect(result?.loopName).toBe('API v2.0 Migration!')
+    // Worktree name is sanitized
+    expect(result?.worktreeName).toBe('api-v2-0-migration')
   })
 
   test('Uses code agent for prompt', async () => {
@@ -292,9 +444,88 @@ describe('Fresh Loop Launch', () => {
       projectId,
       isWorktree: false,
       api: mockApi,
+      dbPath,
     })
 
     const callArgs = (mockApi.client.session.promptAsync as any).mock.calls[0][0]
     expect(callArgs.agent).toBe('code')
+  })
+
+  test('Returns display name in loopName field (not sanitized)', async () => {
+    const mockApi = createMockApi()
+    const planWithDisplayName = '# Test Plan\n\nLoop Name: API Migration v2.0\n\nContent.'
+    
+    const result = await launchFreshLoop({
+      planText: planWithDisplayName,
+      title: 'Test Plan',
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    // Display name should preserve original casing
+    expect(result?.loopName).toBe('API Migration v2.0')
+    // Worktree name should be sanitized
+    expect(result?.worktreeName).toBe('api-migration-v2-0')
+  })
+
+  test('Display name uses markdown bold format correctly', async () => {
+    const mockApi = createMockApi()
+    const planWithMarkdown = '# Plan\n\n**Loop Name**: User Auth System\n\nContent'
+    
+    const result = await launchFreshLoop({
+      planText: planWithMarkdown,
+      title: 'Test Plan',
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    expect(result?.loopName).toBe('User Auth System')
+    expect(result?.worktreeName).toBe('user-auth-system')
+  })
+
+  test('Display name handles bullet list format', async () => {
+    const mockApi = createMockApi()
+    const planWithBullet = '# Plan\n\n- **Loop Name**: Database Optimization\n\nContent'
+    
+    const result = await launchFreshLoop({
+      planText: planWithBullet,
+      title: 'Test Plan',
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    expect(result?.loopName).toBe('Database Optimization')
+    expect(result?.worktreeName).toBe('database-optimization')
+  })
+
+  test('Falls back to title when no explicit loop name', async () => {
+    const mockApi = createMockApi()
+    const planWithoutLoopName = '# Fallback Title Here\n\nContent without loop name'
+    
+    const result = await launchFreshLoop({
+      planText: planWithoutLoopName,
+      title: 'Fallback Title Here',
+      directory: TEST_DIR,
+      projectId,
+      isWorktree: false,
+      api: mockApi,
+      dbPath,
+    })
+
+    expect(result).toBeDefined()
+    expect(result?.loopName).toBe('Fallback Title Here')
+    expect(result?.worktreeName).toBe('fallback-title-here')
   })
 })

@@ -17,7 +17,7 @@ const z = tool.schema
 interface LoopSetupOptions {
   prompt: string
   sessionTitle: string
-  worktreeName?: string
+  worktreeName: string
   completionSignal: string | null
   maxIterations: number
   audit: boolean
@@ -32,9 +32,10 @@ export async function setupLoop(
   options: LoopSetupOptions,
 ): Promise<string> {
   const { v2, directory, config, loopService, logger, sandboxManager } = ctx
-  const autoWorktreeName = options.worktreeName ?? `loop-${slugify(options.sessionTitle.replace(/^Loop:\s*/i, ''))}`
   const projectDir = directory
   const maxIter = options.maxIterations ?? config.loop?.defaultMaxIterations ?? 0
+  
+  const uniqueWorktreeName = loopService.generateUniqueWorktreeName(options.worktreeName)
 
   interface LoopContext {
     sessionId: string
@@ -72,7 +73,7 @@ export async function setupLoop(
     }
   } else {
     const worktreeResult = await v2.worktree.create({
-      worktreeCreateInput: { name: autoWorktreeName },
+      worktreeCreateInput: { name: uniqueWorktreeName },
     })
 
     if (worktreeResult.error || !worktreeResult.data) {
@@ -112,9 +113,9 @@ export async function setupLoop(
 
   if (sandboxEnabled) {
     try {
-      const result = await sandboxManager!.start(autoWorktreeName, loopContext.directory)
+      const result = await sandboxManager!.start(uniqueWorktreeName, loopContext.directory)
       sandboxContainerName = result.containerName
-      logger.log(`Sandbox container ${sandboxContainerName} started for loop ${autoWorktreeName}`)
+      logger.log(`Sandbox container ${sandboxContainerName} started for loop ${uniqueWorktreeName}`)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logger.error(`loop: failed to start sandbox container`, err)
@@ -125,7 +126,7 @@ export async function setupLoop(
   const state: LoopState = {
     active: true,
     sessionId: loopContext.sessionId,
-    worktreeName: autoWorktreeName,
+    worktreeName: uniqueWorktreeName,
     worktreeDir: loopContext.directory,
     worktreeBranch: loopContext.branch,
     iteration: 1,
@@ -142,9 +143,9 @@ export async function setupLoop(
     sandboxContainerName,
   }
 
-  loopService.setState(autoWorktreeName, state)
-  loopService.registerSession(loopContext.sessionId, autoWorktreeName)
-  logger.log(`loop: state stored for worktree=${autoWorktreeName}`)
+  loopService.setState(uniqueWorktreeName, state)
+  loopService.registerSession(loopContext.sessionId, uniqueWorktreeName)
+  logger.log(`loop: state stored for worktree=${uniqueWorktreeName}`)
 
   let promptText = options.prompt
   if (options.completionSignal) {
@@ -171,10 +172,10 @@ export async function setupLoop(
 
   if (promptResult.error) {
     logger.error(`loop: failed to send prompt`, promptResult.error)
-    loopService.deleteState(autoWorktreeName)
+    loopService.deleteState(uniqueWorktreeName)
     if (sandboxEnabled) {
       try {
-        await sandboxManager!.stop(autoWorktreeName)
+        await sandboxManager!.stop(uniqueWorktreeName)
       } catch (sbxErr) {
         logger.error(`loop: failed to stop sandbox container on prompt failure`, sbxErr)
       }
@@ -191,7 +192,7 @@ export async function setupLoop(
       : 'Loop session created but failed to send prompt. Cleaned up.'
   }
 
-  options.onLoopStarted?.(autoWorktreeName)
+  options.onLoopStarted?.(uniqueWorktreeName)
 
   if (!options.worktree) {
     v2.tui.selectSession({ sessionID: loopContext.sessionId }).catch((err) => {
@@ -216,7 +217,7 @@ export async function setupLoop(
       lines.push(`Branch: ${loopContext.branch} (in-place)`)
     }
   } else {
-    lines.push(`Worktree name: ${autoWorktreeName}`)
+    lines.push(`Worktree name: ${uniqueWorktreeName}`)
     lines.push(`Worktree: ${loopContext.directory}`)
     lines.push(`Branch: ${loopContext.branch}`)
   }
@@ -245,6 +246,7 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
         plan: z.string().optional().describe('The full implementation plan. If omitted, reads from the session plan store.'),
         title: z.string().describe('Short title for the session (shown in session list)'),
         worktree: z.boolean().optional().default(false).describe('Run in isolated git worktree instead of current directory'),
+        worktreeName: z.string().optional().describe('Name for the worktree (max 25 chars, auto-incremented if collision exists)'),
       },
       execute: async (args, context) => {
         if (config.loop?.enabled === false) {
@@ -267,10 +269,13 @@ export function createLoopTools(ctx: ToolContext): Record<string, ReturnType<typ
         const sessionTitle = args.title.length > 60 ? `${args.title.substring(0, 57)}...` : args.title
         const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
         const audit = config.loop?.defaultAudit ?? true
+        
+        const worktreeName = args.worktreeName ? slugify(args.worktreeName) : slugify(sessionTitle)
 
         return setupLoop(ctx, {
           prompt: planText,
           sessionTitle: `Loop: ${sessionTitle}`,
+          worktreeName,
           completionSignal: DEFAULT_COMPLETION_SIGNAL,
           maxIterations: config.loop?.defaultMaxIterations ?? 0,
           audit: audit,

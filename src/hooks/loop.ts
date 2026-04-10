@@ -380,6 +380,170 @@ export function createLoopEventHandler(
     return newSessionId
   }
 
+  /**
+   * Shared: handle assistant error detection and model failure.
+   * Returns null if the loop was terminated (caller should return).
+   * Returns updated { assistantErrorDetected, currentState }.
+   */
+  async function detectAndHandleAssistantError(
+    worktreeName: string,
+    currentState: LoopState,
+    assistantError: string | null,
+    phase: string,
+  ): Promise<{ assistantErrorDetected: boolean; currentState: LoopState } | null> {
+    if (!assistantError) {
+      return { assistantErrorDetected: false, currentState }
+    }
+
+    logger.error(`Loop: assistant error detected in ${phase} phase: ${assistantError}`)
+    const isModelError = /provider|auth|model|api\s*error/i.test(assistantError)
+    if (isModelError) {
+      const nextErrorCount = (currentState.errorCount ?? 0) + 1
+      if (nextErrorCount >= MAX_RETRIES) {
+        await terminateLoop(worktreeName, currentState, `error_max_retries: assistant error: ${assistantError}`)
+        return null
+      }
+      loopService.setState(worktreeName, { ...currentState, modelFailed: true, errorCount: nextErrorCount })
+      logger.log(`Loop: marking model as failed, will fall back to default model (error ${nextErrorCount}/${MAX_RETRIES})`)
+      return { assistantErrorDetected: true, currentState: loopService.getActiveState(worktreeName)! }
+    }
+
+    return { assistantErrorDetected: true, currentState }
+  }
+
+  /**
+   * Shared: check completion signal and terminate if ready.
+   * Returns true if the loop was terminated (caller should return).
+   */
+  async function checkCompletionAndTerminate(
+    worktreeName: string,
+    currentState: LoopState,
+    textContent: string | null,
+    auditCount: number,
+  ): Promise<boolean> {
+    if (!currentState.completionSignal || !textContent) return false
+    if (!loopService.checkCompletionSignal(textContent, currentState.completionSignal)) return false
+
+    if (!currentState.audit || auditCount >= minAudits) {
+      if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
+        logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
+        return false
+      }
+      await terminateLoop(worktreeName, currentState, 'completed')
+      logger.log(`Loop completed: detected ${currentState.completionSignal} at iteration ${currentState.iteration} (${auditCount}/${minAudits} audits)`)
+      return true
+    }
+
+    logger.log(`Loop: completion promise detected but only ${auditCount}/${minAudits} audits performed, continuing`)
+    return false
+  }
+
+  /**
+   * Shared: reset error count after a successful (non-error) iteration.
+   */
+  function resetErrorCountIfNeeded(worktreeName: string, currentState: LoopState, assistantErrorDetected: boolean, phase: string): LoopState {
+    if (!assistantErrorDetected && currentState.errorCount && currentState.errorCount > 0) {
+      loopService.setState(worktreeName, { ...currentState, errorCount: 0, modelFailed: false })
+      logger.log(`Loop: resetting error count after successful retry in ${phase} phase`)
+      return loopService.getActiveState(worktreeName)!
+    }
+    return currentState
+  }
+
+  /**
+   * Shared: rotate session and send continuation prompt with model fallback.
+   */
+  async function rotateAndSendContinuation(
+    worktreeName: string,
+    currentState: LoopState,
+    stateUpdates: Partial<LoopState>,
+    continuationPrompt: string,
+    assistantErrorDetected: boolean,
+    errorContext: string,
+  ): Promise<void> {
+    let activeSessionId = currentState.sessionId
+    try {
+      activeSessionId = await rotateSession(worktreeName, currentState)
+    } catch (err) {
+      logger.error(`Loop: session rotation failed, continuing with existing session`, err)
+    }
+
+    loopService.setState(worktreeName, {
+      ...currentState,
+      sessionId: activeSessionId,
+      errorCount: assistantErrorDetected ? currentState.errorCount : 0,
+      modelFailed: assistantErrorDetected ? currentState.modelFailed : false,
+      ...stateUpdates,
+    })
+
+    const nextIteration = stateUpdates.iteration ?? currentState.iteration
+    logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
+
+    const currentConfig = getConfig()
+    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
+    if (!loopModel) {
+      logger.log(`Loop: configured model previously failed, using default model`)
+    }
+
+    const sendWithModel = async () => {
+      const freshState = loopService.getActiveState(worktreeName)
+      if (!freshState?.active) {
+        throw new Error('loop_cancelled')
+      }
+      const result = await v2Client.session.promptAsync({
+        sessionID: activeSessionId,
+        directory: freshState.worktreeDir,
+        parts: [{ type: 'text' as const, text: continuationPrompt }],
+        model: loopModel,
+      })
+      return { data: result.data, error: result.error }
+    }
+
+    const sendWithoutModel = async () => {
+      const freshState = loopService.getActiveState(worktreeName)
+      if (!freshState?.active) {
+        throw new Error('loop_cancelled')
+      }
+      const result = await v2Client.session.promptAsync({
+        sessionID: activeSessionId,
+        directory: freshState.worktreeDir,
+        parts: [{ type: 'text' as const, text: continuationPrompt }],
+      })
+      return { data: result.data, error: result.error }
+    }
+
+    const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
+      sendWithModel,
+      sendWithoutModel,
+      loopModel,
+      logger,
+    )
+
+    if (promptResult.error) {
+      const retryFn = async () => {
+        const freshState = loopService.getActiveState(worktreeName)
+        if (!freshState?.active) {
+          throw new Error('loop_cancelled')
+        }
+        const result = await sendWithoutModel()
+        if (result.error) {
+          await handlePromptError(worktreeName, currentState, `retry failed ${errorContext}`, result.error)
+          return
+        }
+      }
+      await handlePromptError(worktreeName, currentState, `failed to send continuation prompt ${errorContext}`, promptResult.error, retryFn)
+      return
+    }
+
+    if (actualModel) {
+      logger.log(`${errorContext} using model: ${actualModel.providerID}/${actualModel.modelID}`)
+    } else {
+      logger.log(`${errorContext} using default model (fallback)`)
+    }
+
+    consecutiveStalls.set(worktreeName, 0)
+  }
+
   async function handleCodingPhase(worktreeName: string, _state: LoopState): Promise<void> {
     let currentState = loopService.getActiveState(worktreeName)
     if (!currentState?.active) {
@@ -400,42 +564,16 @@ export function createLoopEventHandler(
         logger.error(`Loop: assistant message not found in coding phase (last message: ${lastMessageRole}), session may not have responded yet`)
         return
       }
-      if (assistantError) {
-        assistantErrorDetected = true
-        logger.error(`Loop: assistant error detected in coding phase: ${assistantError}`)
-        const isModelError = /provider|auth|model|api\s*error/i.test(assistantError)
-        if (isModelError) {
-          const nextErrorCount = (currentState.errorCount ?? 0) + 1
-          if (nextErrorCount >= MAX_RETRIES) {
-            await terminateLoop(worktreeName, currentState, `error_max_retries: assistant error: ${assistantError}`)
-            return
-          }
-          loopService.setState(worktreeName, { ...currentState, modelFailed: true, errorCount: nextErrorCount })
-          logger.log(`Loop: marking model as failed, will fall back to default model (error ${nextErrorCount}/${MAX_RETRIES})`)
-          currentState = loopService.getActiveState(worktreeName)!
-        }
-      }
-      if (textContent && currentState.completionSignal && loopService.checkCompletionSignal(textContent, currentState.completionSignal)) {
-        const currentAuditCount = currentState.auditCount ?? 0
-        if (!currentState.audit || currentAuditCount >= minAudits) {
-          if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
-            logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
-          } else {
-            await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected ${currentState.completionSignal} at iteration ${currentState.iteration} (${currentAuditCount}/${minAudits} audits)`)
-            return
-          }
-        } else {
-          logger.log(`Loop: completion promise detected but only ${currentAuditCount}/${minAudits} audits performed, continuing`)
-        }
-      }
+
+      const errorResult = await detectAndHandleAssistantError(worktreeName, currentState, assistantError, 'coding')
+      if (!errorResult) return
+      assistantErrorDetected = errorResult.assistantErrorDetected
+      currentState = errorResult.currentState
+
+      if (await checkCompletionAndTerminate(worktreeName, currentState, textContent, currentState.auditCount ?? 0)) return
     }
 
-    if (!assistantErrorDetected && currentState.errorCount && currentState.errorCount > 0) {
-      loopService.setState(worktreeName, { ...currentState, errorCount: 0, modelFailed: false })
-      logger.log(`Loop: resetting error count after successful retry in coding phase`)
-      currentState = loopService.getActiveState(worktreeName)!
-    }
+    currentState = resetErrorCountIfNeeded(worktreeName, currentState, assistantErrorDetected, 'coding')
 
     if ((currentState.maxIterations ?? 0) > 0 && (currentState.iteration ?? 0) >= (currentState.maxIterations ?? 0)) {
       await terminateLoop(worktreeName, currentState, 'max_iterations')
@@ -456,9 +594,9 @@ export function createLoopEventHandler(
           prompt: loopService.buildAuditPrompt(currentState),
         }],
       }
-      
+
       const promptResult = await v2Client.session.promptAsync(auditPrompt)
-      
+
       if (promptResult.error) {
         const retryFn = async () => {
           const result = await v2Client.session.promptAsync(auditPrompt)
@@ -469,97 +607,29 @@ export function createLoopEventHandler(
         await handlePromptError(worktreeName, { ...currentState, phase: 'coding' }, 'failed to send audit prompt', promptResult.error, retryFn)
         return
       }
-      
+
       const currentConfig = getConfig()
       const configuredModel = currentConfig.auditorModel ?? currentConfig.loop?.model ?? currentConfig.executionModel
       logger.log(`auditor using agent-configured model: ${configuredModel ?? 'default'}`)
-      
+
       consecutiveStalls.set(worktreeName, 0)
       return
     }
 
-    let activeSessionId = currentState.sessionId
-    try {
-      activeSessionId = await rotateSession(worktreeName, currentState)
-    } catch (err) {
-      logger.error(`Loop: session rotation failed, continuing with existing session`, err)
-    }
-
     const nextIteration = (currentState.iteration ?? 0) + 1
-    loopService.setState(worktreeName, {
-      ...currentState,
-      sessionId: activeSessionId,
-      iteration: nextIteration,
-      errorCount: assistantErrorDetected ? currentState.errorCount : 0,
-      modelFailed: assistantErrorDetected ? currentState.modelFailed : false,
-    })
-
     const continuationPrompt = loopService.buildContinuationPrompt({ ...currentState, iteration: nextIteration })
-    logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
 
-    const currentConfig = getConfig()
-    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
-    if (!loopModel) {
-      logger.log(`Loop: configured model previously failed, using default model`)
-    }
-
-    const sendContinuationPromptWithModel = async () => {
-      const freshState = loopService.getActiveState(worktreeName)
-      if (!freshState?.active) {
-        throw new Error('loop_cancelled')
-      }
-      const result = await v2Client.session.promptAsync({
-        sessionID: activeSessionId,
-        directory: freshState.worktreeDir,
-        parts: [{ type: 'text' as const, text: continuationPrompt }],
-        model: loopModel,
-      })
-      return { data: result.data, error: result.error }
-    }
-    
-    const sendContinuationPromptWithoutModel = async () => {
-      const freshState = loopService.getActiveState(worktreeName)
-      if (!freshState?.active) {
-        throw new Error('loop_cancelled')
-      }
-      const result = await v2Client.session.promptAsync({
-        sessionID: activeSessionId,
-        directory: freshState.worktreeDir,
-        parts: [{ type: 'text' as const, text: continuationPrompt }],
-      })
-      return { data: result.data, error: result.error }
-    }
-    
-    const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
-      sendContinuationPromptWithModel,
-      sendContinuationPromptWithoutModel,
-      loopModel,
-      logger,
+    await rotateAndSendContinuation(
+      worktreeName,
+      currentState,
+      { iteration: nextIteration },
+      continuationPrompt,
+      assistantErrorDetected,
+      'coding phase',
     )
-    
-    if (promptResult.error) {
-      const retryFn = async () => {
-        const result = await sendContinuationPromptWithoutModel()
-        if (result.error) {
-          await handlePromptError(worktreeName, currentState, 'retry failed', result.error)
-          return
-        }
-      }
-      await handlePromptError(worktreeName, currentState, 'failed to send continuation prompt', promptResult.error, retryFn)
-      return
-    }
-    
-    if (actualModel) {
-      logger.log(`coding phase using model: ${actualModel.providerID}/${actualModel.modelID}`)
-    } else {
-      logger.log(`coding phase using default model (fallback)`)
-    }
-    
-    consecutiveStalls.set(worktreeName, 0)
   }
 
   async function handleAuditingPhase(worktreeName: string, _state: LoopState): Promise<void> {
-    // Re-fetch and validate state to catch aborts that happened during idle event processing
     let currentState = loopService.getActiveState(worktreeName)
     if (!currentState?.active) {
       logger.log(`Loop: loop ${worktreeName} no longer active, skipping auditing phase`)
@@ -579,144 +649,44 @@ export function createLoopEventHandler(
       return
     }
 
-    let assistantErrorDetected = false
-    if (assistantError) {
-      assistantErrorDetected = true
-      logger.error(`Loop: assistant error detected in auditing phase: ${assistantError}`)
-      const isModelError = /provider|auth|model|api\s*error/i.test(assistantError)
-      if (isModelError) {
-        const nextErrorCount = (currentState.errorCount ?? 0) + 1
-        if (nextErrorCount >= MAX_RETRIES) {
-          await terminateLoop(worktreeName, currentState, `error_max_retries: assistant error: ${assistantError}`)
-          return
-        }
-        loopService.setState(worktreeName, { ...currentState, modelFailed: true, errorCount: nextErrorCount })
-        logger.log(`Loop: marking model as failed, will fall back to default model (error ${nextErrorCount}/${MAX_RETRIES})`)
-        currentState = loopService.getActiveState(worktreeName)!
-      }
-    }
+    const errorResult = await detectAndHandleAssistantError(worktreeName, currentState, assistantError, 'auditing')
+    if (!errorResult) return
+    const assistantErrorDetected = errorResult.assistantErrorDetected
+    currentState = errorResult.currentState
 
-    if (!assistantErrorDetected && currentState.errorCount && currentState.errorCount > 0) {
-      loopService.setState(worktreeName, { ...currentState, errorCount: 0, modelFailed: false })
-      logger.log(`Loop: resetting error count after successful retry in auditing phase`)
-      currentState = loopService.getActiveState(worktreeName)!
-    }
+    currentState = resetErrorCountIfNeeded(worktreeName, currentState, assistantErrorDetected, 'auditing')
 
     const nextIteration = (currentState.iteration ?? 0) + 1
     const newAuditCount = (currentState.auditCount ?? 0) + 1
     logger.log(`Loop audit ${newAuditCount} at iteration ${currentState.iteration ?? 0}`)
 
-    // Always pass the full audit response to the code agent
     const auditFindings = auditText ?? undefined
 
-    if (currentState.completionSignal && auditText) {
-      if (loopService.checkCompletionSignal(auditText, currentState.completionSignal)) {
-        if (!currentState.audit || newAuditCount >= minAudits) {
-          if (loopService.hasOutstandingFindings(currentState.worktreeBranch)) {
-            logger.log(`Loop: completion promise detected but outstanding review findings remain, continuing`)
-          } else {
-            await terminateLoop(worktreeName, currentState, 'completed')
-            logger.log(`Loop completed: detected ${currentState.completionSignal} in audit at iteration ${currentState.iteration} (${newAuditCount}/${minAudits} audits)`)
-            return
-          }
-        } else {
-          logger.log(`Loop: completion promise detected but only ${newAuditCount}/${minAudits} audits performed, continuing`)
-        }
-      }
-    }
+    if (await checkCompletionAndTerminate(worktreeName, currentState, auditText, newAuditCount)) return
 
     if ((currentState.maxIterations ?? 0) > 0 && nextIteration > (currentState.maxIterations ?? 0)) {
       await terminateLoop(worktreeName, currentState, 'max_iterations')
       return
     }
 
-    let activeSessionId = currentState.sessionId
-    try {
-      activeSessionId = await rotateSession(worktreeName, currentState)
-    } catch (err) {
-      logger.error(`Loop: session rotation failed, continuing with existing session`, err)
-    }
-
-    loopService.setState(worktreeName, {
-      ...currentState,
-      sessionId: activeSessionId,
-      iteration: nextIteration,
-      phase: 'coding',
-      lastAuditResult: auditFindings,
-      auditCount: newAuditCount,
-      errorCount: assistantErrorDetected ? currentState.errorCount : 0,
-      modelFailed: assistantErrorDetected ? currentState.modelFailed : false,
-    })
-
     const continuationPrompt = loopService.buildContinuationPrompt(
       { ...currentState, iteration: nextIteration },
       auditFindings,
     )
-    logger.log(`Loop iteration ${nextIteration} for session ${activeSessionId}`)
 
-    const currentConfig = getConfig()
-    const loopModel = resolveLoopModel(currentConfig, loopService, worktreeName)
-    if (!loopModel) {
-      logger.log(`Loop: configured model previously failed, using default model`)
-    }
-
-    const sendContinuationPromptWithModel = async () => {
-      const freshState = loopService.getActiveState(worktreeName)
-      if (!freshState?.active) {
-        throw new Error('loop_cancelled')
-      }
-      const result = await v2Client.session.promptAsync({
-        sessionID: activeSessionId,
-        directory: freshState.worktreeDir,
-        parts: [{ type: 'text' as const, text: continuationPrompt }],
-        model: loopModel,
-      })
-      return { data: result.data, error: result.error }
-    }
-    
-    const sendContinuationPromptWithoutModel = async () => {
-      const freshState = loopService.getActiveState(worktreeName)
-      if (!freshState?.active) {
-        throw new Error('loop_cancelled')
-      }
-      const result = await v2Client.session.promptAsync({
-        sessionID: activeSessionId,
-        directory: freshState.worktreeDir,
-        parts: [{ type: 'text' as const, text: continuationPrompt }],
-      })
-      return { data: result.data, error: result.error }
-    }
-    
-    const { result: promptResult, usedModel: actualModel } = await retryWithModelFallback(
-      sendContinuationPromptWithModel,
-      sendContinuationPromptWithoutModel,
-      loopModel,
-      logger,
+    await rotateAndSendContinuation(
+      worktreeName,
+      currentState,
+      {
+        iteration: nextIteration,
+        phase: 'coding',
+        lastAuditResult: auditFindings,
+        auditCount: newAuditCount,
+      },
+      continuationPrompt,
+      assistantErrorDetected,
+      'coding continuation',
     )
-    
-    if (promptResult.error) {
-      const retryFn = async () => {
-        const freshState = loopService.getActiveState(worktreeName)
-        if (!freshState?.active) {
-          throw new Error('loop_cancelled')
-        }
-        const result = await sendContinuationPromptWithoutModel()
-        if (result.error) {
-          await handlePromptError(worktreeName, currentState, 'retry failed after audit', result.error)
-          return
-        }
-      }
-      await handlePromptError(worktreeName, currentState, 'failed to send continuation prompt after audit', promptResult.error, retryFn)
-      return
-    }
-    
-    if (actualModel) {
-      logger.log(`coding continuation using model: ${actualModel.providerID}/${actualModel.modelID}`)
-    } else {
-      logger.log(`coding continuation using default model (fallback)`)
-    }
-    
-    consecutiveStalls.set(worktreeName, 0)
   }
 
   async function onEvent(input: { event: { type: string; properties?: Record<string, unknown> } }): Promise<void> {

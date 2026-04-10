@@ -42,11 +42,7 @@ export function buildCompletionSignalInstructions(signal: string): string {
   return `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${signal}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
 }
 
-export const LOOP_PERMISSION_RULESET = [
-  { permission: '*', pattern: '*', action: 'allow' as const },
-  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
-  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
-]
+export { LOOP_PERMISSION_RULESET } from '../constants/loop'
 
 export interface LoopState {
   active: boolean
@@ -93,6 +89,7 @@ export interface LoopService {
   reconcileStale(): number
   hasOutstandingFindings(branch?: string): boolean
   getOutstandingFindings(branch?: string): KvEntry[]
+  generateUniqueWorktreeName(baseName: string): string
 }
 
 export function createLoopService(
@@ -279,6 +276,14 @@ export function createLoopService(
     return getOutstandingFindings(branch).length > 0
   }
 
+  function generateUniqueWorktreeName(baseName: string): string {
+    const existing = listRecent()
+    const active = listActive()
+    const allNames = [...existing, ...active].map((s) => s.worktreeName)
+    
+    return generateUniqueName(baseName, allNames)
+  }
+
   return {
     getActiveState,
     getAnyState,
@@ -300,7 +305,35 @@ export function createLoopService(
     reconcileStale,
     hasOutstandingFindings,
     getOutstandingFindings,
+    generateUniqueWorktreeName,
   }
+}
+
+/**
+ * Generates a unique worktree name by checking against existing names and appending a numeric suffix if needed.
+ * This is exported for use by TUI and other modules that need to generate unique names without direct loop service access.
+ * 
+ * @param baseName - The base name to uniquify
+ * @param existingNames - Array of existing worktree names to check against
+ * @returns A unique name (either the base name or with -1, -2, etc. suffix)
+ */
+export function generateUniqueName(baseName: string, existingNames: readonly string[]): string {
+  const maxLength = 25
+  const truncated = baseName.length > maxLength ? baseName.substring(0, maxLength) : baseName
+  
+  if (!existingNames.includes(truncated)) {
+    return truncated
+  }
+  
+  let counter = 1
+  let candidate = `${truncated}-${counter}`
+  
+  while (existingNames.includes(candidate)) {
+    counter++
+    candidate = `${truncated}-${counter}`
+  }
+  
+  return candidate
 }
 
 export interface LoopSessionOutput {

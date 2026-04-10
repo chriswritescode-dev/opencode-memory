@@ -10,28 +10,71 @@ import { Database } from 'bun:sqlite'
 import { existsSync } from 'fs'
 import { homedir, platform } from 'os'
 import { join } from 'path'
-import { slugify } from './logger'
-import { DEFAULT_COMPLETION_SIGNAL } from '../services/loop'
+import { DEFAULT_COMPLETION_SIGNAL, generateUniqueName, buildCompletionSignalInstructions } from '../services/loop'
+import { extractLoopNames } from './plan-execution'
+import { createKvQuery } from '../storage/kv-queries'
 
-interface FreshLoopOptions {
+export interface FreshLoopOptions {
   planText: string
   title: string
   directory: string
   projectId: string
   isWorktree: boolean
   api: TuiPluginApi
+  dbPath?: string
+}
+
+export interface LaunchResult {
+  sessionId: string
+  loopName: string
+  worktreeName: string
+  isWorktree: boolean
+  worktreeDir?: string
+  worktreeBranch?: string
 }
 
 /**
  * Launches a fresh loop session (either in-place or in a worktree).
  * This is separate from restartLoop() which requires preexisting loop state.
  * 
- * @returns The new session ID if successful, null otherwise
+ * @returns LaunchResult with session ID, loop name, and worktree details if successful, null otherwise
  */
-export async function launchFreshLoop(options: FreshLoopOptions): Promise<string | null> {
+export async function launchFreshLoop(options: FreshLoopOptions): Promise<LaunchResult | null> {
   const { planText, title, directory, projectId, isWorktree, api } = options
+
+  // Extract loop name from plan (uses explicit Loop Name field or falls back to title)
+  const { displayName, executionName } = extractLoopNames(planText)
+
+  // Read existing loop names from KV to generate a unique worktree name
+  const dbPath = options.dbPath ?? join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share', 'opencode', 'memory', 'memory.db')
+  const existingNames: string[] = []
   
-  const worktreeName = slugify(title)
+  if (existsSync(dbPath)) {
+    let db: Database | null = null
+    try {
+      db = new Database(dbPath, { readonly: true })
+      const stmt = db.prepare('SELECT data FROM project_kv WHERE project_id = ? AND key LIKE ? AND expires_at > ?')
+      const rows = stmt.all(projectId, 'loop:%', Date.now()) as Array<{ data: string }>
+      
+      for (const row of rows) {
+        try {
+          const state = JSON.parse(row.data)
+          if (state?.worktreeName) {
+            existingNames.push(state.worktreeName)
+          }
+        } catch {
+          // Skip invalid JSON
+        }
+      }
+    } catch {
+      // Continue even if we can't read existing names
+    } finally {
+      try { db?.close() } catch {}
+    }
+  }
+  
+  // Generate unique worktree name before any side effects
+  const uniqueWorktreeName = generateUniqueName(executionName, existingNames)
   
   // Create session based on worktree mode
   let sessionId: string
@@ -41,7 +84,7 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
   if (isWorktree) {
     // Create worktree and session
     const worktreeResult = await api.client.worktree.create({
-      worktreeCreateInput: { name: worktreeName },
+      worktreeCreateInput: { name: uniqueWorktreeName },
     })
     
     if (worktreeResult.error || !worktreeResult.data) {
@@ -78,26 +121,24 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
   }
   
   // Store plan and loop state in KV if database exists
-  const dbPath = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share', 'opencode', 'memory', 'memory.db')
   const dbExists = existsSync(dbPath)
   
   if (dbExists) {
     let db: Database | null = null
     try {
       db = new Database(dbPath)
+      const queries = createKvQuery(db)
       const now = Date.now()
       const TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
       
-      // Store plan with worktree name key
-      db.prepare(
-        'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(projectId, `plan:${worktreeName}`, JSON.stringify(planText), now + TTL_MS, now, now)
+      // Store plan with unique worktree name key
+      queries.set(projectId, `plan:${uniqueWorktreeName}`, JSON.stringify(planText), now + TTL_MS)
       
       // Store loop state in KV
       const loopState = {
         active: true,
         sessionId,
-        worktreeName,
+        worktreeName: uniqueWorktreeName,
         worktreeDir: sessionDirectory,
         worktreeBranch,
         iteration: 1,
@@ -112,14 +153,10 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
         worktree: isWorktree,
       }
       
-      db.prepare(
-        'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-      ).run(projectId, `loop:${worktreeName}`, JSON.stringify(loopState), now + TTL_MS, now)
+      queries.set(projectId, `loop:${uniqueWorktreeName}`, JSON.stringify(loopState), now + TTL_MS)
       
       // Store session mapping
-      db.prepare(
-        'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-      ).run(projectId, `loop-session:${sessionId}`, JSON.stringify(worktreeName), now + TTL_MS, now)
+      queries.set(projectId, `loop-session:${sessionId}`, JSON.stringify(uniqueWorktreeName), now + TTL_MS)
     } catch {
       // Continue even if DB operations fail
     } finally {
@@ -130,7 +167,7 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
   // Build prompt with completion signal
   let promptText = planText
   if (DEFAULT_COMPLETION_SIGNAL) {
-    promptText += `\n\n---\n\n**IMPORTANT - Completion Signal:** When you have completed ALL phases of this plan successfully, you MUST output the following phrase exactly: ${DEFAULT_COMPLETION_SIGNAL}\n\nBefore outputting the completion signal, you MUST:\n1. Verify each phase's acceptance criteria are met\n2. Run all verification commands listed in the plan and confirm they pass\n3. If tests were required, confirm they exist AND pass\n\nDo NOT output this phrase until every phase is truly complete and all verification steps pass. The loop will continue until this signal is detected.`
+    promptText += buildCompletionSignalInstructions(DEFAULT_COMPLETION_SIGNAL)
   }
   
   // Send prompt to code agent
@@ -145,5 +182,12 @@ export async function launchFreshLoop(options: FreshLoopOptions): Promise<string
     return null
   }
   
-  return sessionId
+  return {
+    sessionId,
+    loopName: displayName,
+    worktreeName: uniqueWorktreeName,
+    isWorktree,
+    worktreeDir: sessionDirectory,
+    worktreeBranch,
+  }
 }

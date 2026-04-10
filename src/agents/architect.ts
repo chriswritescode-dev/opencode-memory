@@ -108,6 +108,7 @@ Plans are scoped to the current session and expire after 7 days. Use these tools
 
 Present plans with:
 - **Objective**: What we're building and why
+- **Loop Name**: A short, machine-friendly name (1-3 words) that captures the plan's main intent. This will be used for worktree/session naming. Example: "Loop Name: auth-refactor" or "Loop Name: api-validation"
 - **Phases**: Ordered implementation steps, each with specific files to create/modify, what changes to make, and acceptance criteria
 - **Verification**: Concrete criteria the code agent can validate automatically inside the loop. Every plan MUST include verification. Plans without verification are incomplete.
 

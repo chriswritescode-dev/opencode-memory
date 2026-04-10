@@ -41,7 +41,7 @@ describe('plan-write', () => {
       kvService,
       projectId: 'test-project',
       logger: mockLogger,
-      loopService: {} as any,
+      loopService: { resolveWorktreeName: () => null } as any,
       directory: TEST_DIR,
       sessionID: 'test-session',
       config: {} as any,
@@ -108,7 +108,7 @@ describe('plan-edit', () => {
       kvService,
       projectId: 'test-project',
       logger: mockLogger,
-      loopService: {} as any,
+      loopService: { resolveWorktreeName: () => null } as any,
       directory: TEST_DIR,
       sessionID: 'test-session',
       config: {} as any,
@@ -211,7 +211,7 @@ describe('plan-read', () => {
       kvService,
       projectId: 'test-project',
       logger: mockLogger,
-      loopService: {} as any,
+      loopService: { resolveWorktreeName: () => null } as any,
       directory: TEST_DIR,
       sessionID: 'test-session',
       config: {} as any,
@@ -309,5 +309,76 @@ describe('plan-read', () => {
     )
 
     expect(result).toContain('Invalid regex pattern')
+  })
+})
+
+describe('plan-read with loop session', () => {
+  let db: Database
+  let kvService: ReturnType<typeof createKvService>
+  let tools: ReturnType<typeof createPlanTools>
+
+  beforeEach(() => {
+    db = createTestDb()
+    kvService = createKvService(db, mockLogger)
+    tools = createPlanTools({
+      kvService,
+      projectId: 'test-project',
+      logger: mockLogger,
+      loopService: {
+        resolveWorktreeName: (sessionID: string) =>
+          sessionID === 'loop-session-123' ? 'my-loop' : null,
+      } as any,
+      directory: TEST_DIR,
+      sessionID: 'test-session',
+      config: {} as any,
+      sandboxManager: {} as any,
+    })
+
+    kvService.set('test-project', 'plan:my-loop', '# Loop Plan\n\n## Phase 1\n- Do the thing')
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  test('resolves plan key to worktree name for loop sessions', async () => {
+    const result = await tools['plan-read'].execute(
+      {},
+      { sessionID: 'loop-session-123', directory: TEST_DIR } as any
+    )
+
+    expect(result).toContain('# Loop Plan')
+    expect(result).toContain('Phase 1')
+  })
+
+  test('falls back to session ID when not in a loop', async () => {
+    kvService.set('test-project', 'plan:non-loop-session', '# Regular Plan')
+
+    const result = await tools['plan-read'].execute(
+      {},
+      { sessionID: 'non-loop-session', directory: TEST_DIR } as any
+    )
+
+    expect(result).toContain('# Regular Plan')
+  })
+
+  test('plan-write stores under worktree name for loop sessions', async () => {
+    await tools['plan-write'].execute(
+      { content: '# Updated Loop Plan' },
+      { sessionID: 'loop-session-123', directory: TEST_DIR } as any
+    )
+
+    const stored = kvService.get('test-project', 'plan:my-loop')
+    expect(stored).toBe('# Updated Loop Plan')
+  })
+
+  test('plan-edit edits plan under worktree name for loop sessions', async () => {
+    await tools['plan-edit'].execute(
+      { old_string: '- Do the thing', new_string: '- Do the updated thing' },
+      { sessionID: 'loop-session-123', directory: TEST_DIR } as any
+    )
+
+    const stored = kvService.get<string>('test-project', 'plan:my-loop')
+    expect(stored).toContain('- Do the updated thing')
   })
 })

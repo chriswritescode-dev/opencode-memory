@@ -4,9 +4,13 @@ import type { ToolContext } from './types'
 const z = tool.schema
 
 export function createPlanTools(ctx: ToolContext): Record<string, ReturnType<typeof tool>> {
-  const { kvService, projectId, logger } = ctx
+  const { kvService, projectId, logger, loopService } = ctx
 
   function resolvePlanKey(sessionID: string): string {
+    const worktreeName = loopService.resolveWorktreeName(sessionID)
+    if (worktreeName) {
+      return `plan:${worktreeName}`
+    }
     return `plan:${sessionID}`
   }
 

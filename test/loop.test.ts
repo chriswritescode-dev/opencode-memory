@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createKvQuery } from '../src/storage/kv-queries'
 import { createKvService } from '../src/services/kv'
-import { createLoopService, migrateRalphKeys, buildCompletionSignalInstructions, fetchSessionOutput, type LoopState } from '../src/services/loop'
+import { createLoopService, migrateRalphKeys, buildCompletionSignalInstructions, fetchSessionOutput, type LoopState, generateUniqueName } from '../src/services/loop'
 
 const TEST_DIR = '/tmp/opencode-manager-loop-test-' + Date.now()
 
@@ -2495,5 +2495,114 @@ describe('fetchSessionOutput', () => {
     const result = await fetchSessionOutput(mockClient, 'session-1', '/tmp/test', logger)
 
     expect(result).toBeNull()
+  })
+})
+
+describe('generateUniqueName', () => {
+  test('returns base name when no collision exists', () => {
+    const result = generateUniqueName('test-name', [])
+    expect(result).toBe('test-name')
+  })
+
+  test('returns base name when it does not conflict with existing names', () => {
+    const result = generateUniqueName('test-name', ['other-name', 'different-name'])
+    expect(result).toBe('test-name')
+  })
+
+  test('appends -1 suffix when base name collides', () => {
+    const result = generateUniqueName('test-name', ['test-name'])
+    expect(result).toBe('test-name-1')
+  })
+
+  test('appends incrementing suffix when multiple collisions exist', () => {
+    const existing = ['test-name', 'test-name-1', 'test-name-2']
+    const result = generateUniqueName('test-name', existing)
+    expect(result).toBe('test-name-3')
+  })
+
+  test('skips existing suffixed names when finding next available', () => {
+    const existing = ['test-name', 'test-name-1', 'test-name-3']
+    const result = generateUniqueName('test-name', existing)
+    expect(result).toBe('test-name-2')
+  })
+
+  test('truncates base name to 25 characters when it exceeds limit', () => {
+    const longName = 'this-is-a-very-long-name-that-exceeds-the-limit'
+    const result = generateUniqueName(longName, [])
+    expect(result.length).toBeLessThanOrEqual(25)
+    expect(result).toBe('this-is-a-very-long-name-')
+  })
+
+  test('truncates and adds suffix when truncated name collides', () => {
+    const longName = 'this-is-a-very-long-name-that-exceeds-the-limit'
+    const truncated = 'this-is-a-very-long-name-'
+    const existing = [truncated]
+    const result = generateUniqueName(longName, existing)
+    expect(result).toBe(`${truncated}-1`)
+    expect(result.length).toBeLessThanOrEqual(27) // truncated + -1
+  })
+
+  test('handles multiple collisions with long base name', () => {
+    const longName = 'this-is-a-very-long-name-that-exceeds-the-limit'
+    const truncated = 'this-is-a-very-long-name-'
+    const existing = [truncated, `${truncated}-1`, `${truncated}-2`]
+    const result = generateUniqueName(longName, existing)
+    expect(result).toBe(`${truncated}-3`)
+    expect(result.length).toBeLessThanOrEqual(28)
+  })
+
+  test('handles empty base name gracefully', () => {
+    const result = generateUniqueName('', [''])
+    expect(result).toBe('-1')
+  })
+
+  test('preserves case in existing names for comparison', () => {
+    // Comparison is case-sensitive
+    const result = generateUniqueName('Test-Name', ['test-name'])
+    expect(result).toBe('Test-Name')
+  })
+
+  test('works with active and recent loop names from service', () => {
+    const db = createTestDb()
+    const kvService = createKvService(db)
+    const loopService = createLoopService(kvService, 'test-project', createMockLogger())
+    
+    // Create some active and recent loops
+    const activeState = {
+      active: true,
+      sessionId: 'active-1',
+      worktreeName: 'test-worktree',
+      worktreeDir: '/tmp/test',
+      worktreeBranch: 'main',
+      iteration: 1,
+      maxIterations: 0,
+      completionSignal: null,
+      startedAt: new Date().toISOString(),
+      prompt: 'test',
+      phase: 'coding' as const,
+      audit: false,
+      errorCount: 0,
+      auditCount: 0,
+    }
+    
+    const recentState = {
+      ...activeState,
+      active: false,
+      sessionId: 'recent-1',
+      worktreeName: 'test-worktree-1',
+      completedAt: new Date().toISOString(),
+      terminationReason: 'completed',
+    }
+    
+    loopService.setState('active-1', activeState as any)
+    loopService.setState('recent-1', recentState as any)
+    
+    const active = loopService.listActive()
+    const recent = loopService.listRecent()
+    const allNames = [...active, ...recent].map((s) => s.worktreeName)
+    
+    // Both 'test-worktree' and 'test-worktree-1' exist, so next should be 'test-worktree-2'
+    const result = generateUniqueName('test-worktree', allNames)
+    expect(result).toBe('test-worktree-2')
   })
 })

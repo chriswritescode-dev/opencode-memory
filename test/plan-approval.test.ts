@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createKvService } from '../src/services/kv'
-import { createLoopService } from '../src/services/loop'
+import { createLoopService, generateUniqueName } from '../src/services/loop'
 import type { Logger } from '../src/types'
 import { createToolExecuteAfterHook, createPlanApprovalEventHook } from '../src/tools/plan-approval'
 import type { ToolContext } from '../src/tools/types'
@@ -657,5 +657,19 @@ describe('Execute here bypass', () => {
     expect(retrieved2).toBe(plan2)
     expect(retrieved1).not.toBe(plan2)
     expect(retrieved2).not.toBe(plan1)
+  })
+})
+
+describe('generateUniqueName for plan approval', () => {
+  test('generates unique name when loop collision exists', () => {
+    const existingNames = ['api-integration', 'api-integration-1']
+    const result = generateUniqueName('api-integration', existingNames)
+    expect(result).toBe('api-integration-2')
+  })
+
+  test('generates base name when no collision exists', () => {
+    const existingNames = ['other-loop', 'different-loop']
+    const result = generateUniqueName('new-loop', existingNames)
+    expect(result).toBe('new-loop')
   })
 })

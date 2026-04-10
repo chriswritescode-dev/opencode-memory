@@ -2,25 +2,19 @@
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui'
 import { createEffect, createMemo, createSignal, onCleanup, Show, For } from 'solid-js'
 import { SyntaxStyle, type TextareaRenderable } from '@opentui/core'
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, writeFileSync } from 'fs'
 import { homedir, platform } from 'os'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { Database } from 'bun:sqlite'
 import { VERSION } from './version'
-import { compareVersions } from './utils/upgrade'
 import { fetchSessionStats, type SessionStats } from './utils/session-stats'
 import { slugify } from './utils/logger'
 import { extractPlanTitle, PLAN_EXECUTION_LABELS, matchExecutionLabel } from './utils/plan-execution'
 import { launchFreshLoop } from './utils/loop-launch'
+import { readPlan, writePlan, deletePlan } from './utils/tui-plan-store'
 
-// Note: LOOP_PERMISSION_RULESET is defined in services/loop but TUI cannot import from services due to separate bundling
-// This duplication is intentional to avoid circular dependencies
-const LOOP_PERMISSION_RULESET = [
-  { permission: '*', pattern: '*', action: 'allow' as const },
-  { permission: 'external_directory', pattern: '*', action: 'deny' as const },
-  { permission: 'bash', pattern: 'git push *', action: 'deny' as const },
-]
+import { LOOP_PERMISSION_RULESET } from './constants/loop'
 
 type TuiOptions = {
   sidebar: boolean
@@ -121,54 +115,9 @@ function readLoopStates(projectId: string): LoopInfo[] {
   }
 }
 
-function readPlan(projectId: string, sessionID: string): string | null {
-  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
-  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
-  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
 
-  if (!existsSync(dbPath)) return null
 
-  let db: Database | null = null
-  try {
-    db = new Database(dbPath, { readonly: true })
-    const now = Date.now()
-    const row = db.prepare('SELECT data FROM project_kv WHERE project_id = ? AND key = ? AND expires_at > ?')
-      .get(projectId, `plan:${sessionID}`, now) as { data: string } | null
-    if (!row) return null
-    const data = row.data
-    if (typeof data === 'string' && data.startsWith('"')) {
-      try { return JSON.parse(data) } catch { return data }
-    }
-    return data
-  } catch {
-    return null
-  } finally {
-    try { db?.close() } catch {}
-  }
-}
 
-function writePlan(projectId: string, sessionID: string, content: string): boolean {
-  const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
-  const xdgDataHome = process.env['XDG_DATA_HOME'] || defaultBase
-  const dbPath = join(xdgDataHome, 'opencode', 'memory', 'memory.db')
-
-  if (!existsSync(dbPath)) return false
-
-  let db: Database | null = null
-  try {
-    db = new Database(dbPath)
-    const now = Date.now()
-    const ttl = 7 * 24 * 60 * 60 * 1000
-    db.prepare(
-      'INSERT OR REPLACE INTO project_kv (project_id, key, data, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(projectId, `plan:${sessionID}`, JSON.stringify(content), now + ttl, now, now)
-    return true
-  } catch {
-    return false
-  } finally {
-    try { db?.close() } catch {}
-  }
-}
 
 function cancelLoop(projectId: string, loopName: string): string | null {
   const defaultBase = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share')
@@ -315,6 +264,7 @@ function PlanViewerDialog(props: {
   planContent: string
   projectId: string
   sessionId: string
+  onRefresh?: () => void
 }) {
   const theme = () => props.api.theme.current
   const [editing, setEditing] = createSignal(false)
@@ -333,6 +283,30 @@ function PlanViewerDialog(props: {
     if (saved) {
       setContent(text)
       setEditing(false)
+    }
+  }
+
+  const handleExport = () => {
+    const planText = content()
+    const title = extractPlanTitle(planText)
+    const slugifiedTitle = slugify(title)
+    const directory = props.api.state.path.directory
+    const filename = `${slugifiedTitle}.md`
+    const filepath = join(directory, filename)
+
+    try {
+      writeFileSync(filepath, planText, 'utf-8')
+      props.api.ui.toast({
+        message: `Exported plan to ${filename}`,
+        variant: 'success',
+        duration: 3000,
+      })
+    } catch (error) {
+      props.api.ui.toast({
+        message: `Failed to export plan: ${(error as Error).message}`,
+        variant: 'error',
+        duration: 3000,
+      })
     }
   }
 
@@ -397,17 +371,7 @@ function PlanViewerDialog(props: {
           
           // Delete plan from old session
           if (pid) {
-            const dbPath = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share', 'opencode', 'memory', 'memory.db')
-            if (existsSync(dbPath)) {
-              let db: Database | null = null
-              try {
-                db = new Database(dbPath)
-                db.prepare('DELETE FROM project_kv WHERE project_id = ? AND key = ?').run(pid, `plan:${props.sessionId}`)
-              } catch {}
-              finally {
-                try { db?.close() } catch {}
-              }
-            }
+            deletePlan(pid, props.sessionId)
           }
           
           await props.api.client.session.promptAsync({
@@ -422,6 +386,8 @@ function PlanViewerDialog(props: {
             variant: 'success',
             duration: 3000,
           })
+          
+          setTimeout(() => props.onRefresh?.(), 500)
           
           try {
             props.api.route.navigate('session', { sessionID: newSessionId })
@@ -459,6 +425,7 @@ function PlanViewerDialog(props: {
             variant: 'success',
             duration: 3000,
           })
+          setTimeout(() => props.onRefresh?.(), 500)
         } catch {
           props.api.ui.toast({
             message: 'Failed to execute plan in current session',
@@ -483,7 +450,7 @@ function PlanViewerDialog(props: {
         // Use fresh loop launch helper instead of restartLoop
         // This creates a new loop session rather than requiring preexisting state
         try {
-          const loopSessionId = await launchFreshLoop({
+          const launchResult = await launchFreshLoop({
             planText,
             title,
             directory,
@@ -492,26 +459,19 @@ function PlanViewerDialog(props: {
             api: props.api,
           })
           
-          if (loopSessionId) {
+          if (launchResult) {
             // Delete plan from old session after successful launch
-            const dbPath = join(homedir(), platform() === 'win32' ? 'AppData' : '.local', 'share', 'opencode', 'memory', 'memory.db')
-            if (existsSync(dbPath)) {
-              let db: Database | null = null
-              try {
-                db = new Database(dbPath)
-                db.prepare('DELETE FROM project_kv WHERE project_id = ? AND key = ?').run(pid, `plan:${props.sessionId}`)
-              } catch {}
-              finally {
-                try { db?.close() } catch {}
-              }
+            if (pid) {
+              deletePlan(pid, props.sessionId)
             }
             
-            const worktreeName = slugify(title)
+            // Use the actual loop name returned by the launcher
             props.api.ui.toast({
-              message: isWorktree ? `Loop started in worktree: ${worktreeName}` : `Loop started: ${worktreeName}`,
+              message: isWorktree ? `Loop started in worktree: ${launchResult.loopName}` : `Loop started: ${launchResult.loopName}`,
               variant: 'success',
               duration: 3000,
             })
+            setTimeout(() => props.onRefresh?.(), 500)
           }
         } catch {
           props.api.ui.toast({
@@ -556,6 +516,12 @@ function PlanViewerDialog(props: {
           onMouseUp={() => { setEditing(false); setExecuting(true) }}
         >
           [execute]
+        </text>
+        <text 
+          fg={theme().textMuted} 
+          onMouseUp={handleExport}
+        >
+          [export]
         </text>
       </box>
       
@@ -625,7 +591,7 @@ function PlanViewerDialog(props: {
   )
 }
 
-function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: () => void }) {
+function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: () => void; onRefresh?: () => void }) {
   const theme = () => props.api.theme.current
   const loop = props.loop
   const [stats, setStats] = createSignal<SessionStats | null>(null)
@@ -662,6 +628,7 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: 
       variant: sessionId ? 'success' : 'info',
       duration: 3000,
     })
+    setTimeout(() => props.onRefresh?.(), 300)
   }
 
   const handleRestart = async () => {
@@ -676,6 +643,7 @@ function LoopDetailsDialog(props: { api: TuiPluginApi; loop: LoopInfo; onBack?: 
       variant: newSessionId ? 'success' : 'error',
       duration: 3000,
     })
+    setTimeout(() => props.onRefresh?.(), 300)
   }
 
   const statusBadge = () => {
@@ -921,9 +889,10 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions; sessionId?: strin
                   props.api.ui.toast({ message: 'Plan not found', variant: 'info', duration: 3000 })
                   return
                 }
+                const refreshSidebar = () => refreshLoops()
                 props.api.ui.dialog.setSize("xlarge")
                 props.api.ui.dialog.replace(() => (
-                  <PlanViewerDialog api={props.api} planContent={plan} projectId={pid} sessionId={props.sessionId!} />
+                  <PlanViewerDialog api={props.api} planContent={plan} projectId={pid} sessionId={props.sessionId!} onRefresh={refreshSidebar} />
                 ))
               }}
             >
@@ -941,7 +910,7 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions; sessionId?: strin
                     if (loop.worktree) {
                       props.api.ui.dialog.setSize("medium")
                       props.api.ui.dialog.replace(() => (
-                        <LoopDetailsDialog api={props.api} loop={loop} />
+                        <LoopDetailsDialog api={props.api} loop={loop} onRefresh={() => refreshLoops()} />
                       ))
                     } else {
                       props.api.route.navigate('session', { sessionID: loop.sessionId })
@@ -964,11 +933,8 @@ function Sidebar(props: { api: TuiPluginApi; opts: TuiOptions; sessionId?: strin
 }
 
 const id = '@opencode-manager/memory'
-const MIN_OPENCODE_VERSION = '1.3.5'
 
 const tui: TuiPlugin = async (api) => {
-  const v = api.app.version
-  if (v !== 'local' && compareVersions(v, MIN_OPENCODE_VERSION) < 0) return
 
   const tuiConfig = loadTuiConfig()
   const opts: TuiOptions = {

@@ -2,17 +2,14 @@ import type { ToolContext } from './types'
 import type { Hooks } from '@opencode-ai/plugin'
 import { parseModelString, retryWithModelFallback } from '../utils/model-fallback'
 import { setupLoop } from './loop'
-import { slugify } from '../utils/logger'
 import { DEFAULT_COMPLETION_SIGNAL } from '../services/loop'
-import { extractPlanTitle, PLAN_EXECUTION_LABELS } from '../utils/plan-execution'
+import { extractPlanTitle, extractLoopNames, PLAN_EXECUTION_LABELS } from '../utils/plan-execution'
 
 const LOOP_BLOCKED_TOOLS: Record<string, string> = {
   question: 'The question tool is not available during a memory loop. Do not ask questions — continue working on the task autonomously.',
   'plan-execute': 'The plan-execute tool is not available during a memory loop. Focus on executing the current plan.',
   'memory-loop': 'The memory-loop tool is not available during a memory loop. Focus on executing the current plan.',
 }
-
-const PLAN_APPROVAL_LABELS = PLAN_EXECUTION_LABELS
 
 interface PendingExecution {
   directory: string
@@ -22,7 +19,7 @@ interface PendingExecution {
 
 const pendingExecutions = new Map<string, PendingExecution>()
 
-export { LOOP_BLOCKED_TOOLS, PLAN_APPROVAL_LABELS }
+export { LOOP_BLOCKED_TOOLS }
 export { extractPlanTitle }
 
 export function createToolExecuteBeforeHook(ctx: ToolContext): Hooks['tool.execute.before'] {
@@ -57,12 +54,12 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
       if (options) {
         const labels = options.map((o) => o.label.toLowerCase())
         const hasExecuteHere = labels.some((l) => l === 'execute here' || l.startsWith('execute here'))
-        const isPlanApproval = hasExecuteHere || PLAN_APPROVAL_LABELS.every((l) => labels.includes(l))
+        const isPlanApproval = hasExecuteHere || PLAN_EXECUTION_LABELS.every((l) => labels.includes(l))
         if (isPlanApproval) {
           const metadata = output.metadata as { answers?: string[][] } | undefined
           const answer = metadata?.answers?.[0]?.[0]?.trim() ?? output.output.trim()
           const answerLower = answer.toLowerCase()
-          const matchedLabel = PLAN_APPROVAL_LABELS.find((l) => answerLower === l.toLowerCase() || answerLower.startsWith(l.toLowerCase()))
+          const matchedLabel = PLAN_EXECUTION_LABELS.find((l) => answerLower === l.toLowerCase() || answerLower.startsWith(l.toLowerCase()))
           
           if (matchedLabel?.toLowerCase() === 'execute here') {
             // Read plan from KV (same as "New session" path)
@@ -158,14 +155,17 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
           
           if (matchedLabel === 'Loop (worktree)' || matchedLabel === 'Loop') {
             const isWorktree = matchedLabel === 'Loop (worktree)'
-            const worktreeName = slugify(title)
+            // Use explicit loop name from plan (or fallback to title)
+            const { executionName } = extractLoopNames(planText)
+            const uniqueWorktreeName = ctx.loopService.generateUniqueWorktreeName(executionName)
             
             output.output = isWorktree 
               ? 'Starting loop in worktree...' 
               : 'Starting loop in-place...'
-            logger.log(`Plan approval: "${matchedLabel}" — starting loop`)
+            logger.log(`Plan approval: "${matchedLabel}" — starting loop with worktree name "${uniqueWorktreeName}"`)
             
-            kvService.set(projectId, `plan:${worktreeName}`, planText)
+            // Store plan under the unique worktree name (same name that setupLoop will use)
+            kvService.set(projectId, `plan:${uniqueWorktreeName}`, planText)
             kvService.delete(projectId, `plan:${input.sessionID}`)
             
             const loopModel = parseModelString(config.loop?.model) ?? parseModelString(config.executionModel)
@@ -173,6 +173,7 @@ export function createToolExecuteAfterHook(ctx: ToolContext): Hooks['tool.execut
             setupLoop(ctx, {
               prompt: planText,
               sessionTitle: `Loop: ${title}`,
+              worktreeName: uniqueWorktreeName,
               completionSignal: DEFAULT_COMPLETION_SIGNAL,
               maxIterations: config.loop?.defaultMaxIterations ?? 0,
               audit: config.loop?.defaultAudit ?? true,
