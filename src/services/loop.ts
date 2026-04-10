@@ -176,10 +176,13 @@ export function createLoopService(
 
   function buildAuditPrompt(state: LoopState): string {
     const branchInfo = state.worktreeBranch ? ` (branch: ${state.worktreeBranch})` : ''
+    const planReadInstruction = state.worktreeName
+      ? `The full implementation plan is stored in the plan store under worktree \`${state.worktreeName}\`. Retrieve it by calling plan-read with \`worktree_name\` set to \`${state.worktreeName}\`. Review the code changes against the plan phases and verify per-phase acceptance criteria are met.`
+      : 'The full implementation plan is stored in the plan store. Retrieve it by calling plan-read. Review the code changes against the plan phases and verify per-phase acceptance criteria are met.'
     return [
       `Post-iteration ${String(state.iteration)} code review${branchInfo}.`,
       '',
-      `The full implementation plan is stored in the plan store. Retrieve it by calling plan-read. Review the code changes against the plan phases and verify per-phase acceptance criteria are met.`,
+      planReadInstruction,
       '',
       'Review the code changes in this worktree. Focus on bugs, logic errors, missing error handling, and convention violations.',
       'If you find bugs in related code that affect the correctness of this task, report them — even if the buggy code was not directly modified.',

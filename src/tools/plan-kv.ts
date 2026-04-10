@@ -14,6 +14,13 @@ export function createPlanTools(ctx: ToolContext): Record<string, ReturnType<typ
     return `plan:${sessionID}`
   }
 
+  function resolveExplicitPlanKey(sessionID: string, worktreeName?: string): string {
+    if (worktreeName) {
+      return `plan:${worktreeName}`
+    }
+    return resolvePlanKey(sessionID)
+  }
+
   return {
     'plan-write': tool({
       description: 'Write or overwrite the entire plan content for the current session. Auto-resolves key to plan:{sessionID}.',
@@ -64,19 +71,22 @@ export function createPlanTools(ctx: ToolContext): Record<string, ReturnType<typ
     }),
 
     'plan-read': tool({
-      description: 'Read the plan for the current session. Supports pagination with offset/limit and pattern search.',
+      description: 'Read the plan for the current session or an explicit worktree. Supports pagination with offset/limit and pattern search.',
       args: {
+        worktree_name: z.string().optional().describe('Optional worktree name to read a loop-scoped plan by key'),
         offset: z.number().optional().describe('Line number to start from (1-indexed)'),
         limit: z.number().optional().describe('Maximum number of lines to return'),
         pattern: z.string().optional().describe('Regex pattern to search for in plan content'),
       },
       execute: async (args, context) => {
-        const key = resolvePlanKey(context.sessionID)
+        const key = resolveExplicitPlanKey(context.sessionID, args.worktree_name)
         const value = kvService.get<string>(projectId, key)
-        
+
         if (value === null) {
-          logger.log(`plan-read: no plan found for session ${context.sessionID}`)
-          return `No plan found for current session`
+          logger.log(`plan-read: no plan found at ${key}`)
+          return args.worktree_name
+            ? `No plan found for worktree ${args.worktree_name}`
+            : `No plan found for current session`
         }
 
         logger.log(`plan-read: retrieved plan from ${key}`)

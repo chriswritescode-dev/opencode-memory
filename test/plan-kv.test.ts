@@ -310,6 +310,27 @@ describe('plan-read', () => {
 
     expect(result).toContain('Invalid regex pattern')
   })
+
+  test('reads a loop-scoped plan by explicit worktree name', async () => {
+    kvService.set('test-project', 'plan:graph-integration', '# Loop Plan\n\n## Review\n- Verify acceptance criteria')
+
+    const result = await tools['plan-read'].execute(
+      { worktree_name: 'graph-integration' },
+      { sessionID: 'test-session', directory: TEST_DIR } as any
+    )
+
+    expect(result).toContain('1: # Loop Plan')
+    expect(result).toContain('3: ## Review')
+  })
+
+  test('returns worktree-specific message when explicit worktree plan is missing', async () => {
+    const result = await tools['plan-read'].execute(
+      { worktree_name: 'missing-loop' },
+      { sessionID: 'test-session', directory: TEST_DIR } as any
+    )
+
+    expect(result).toContain('No plan found for worktree missing-loop')
+  })
 })
 
 describe('plan-read with loop session', () => {
@@ -349,6 +370,18 @@ describe('plan-read with loop session', () => {
 
     expect(result).toContain('# Loop Plan')
     expect(result).toContain('Phase 1')
+  })
+
+  test('uses explicit worktree name when provided', async () => {
+    kvService.set('test-project', 'plan:other-loop', '# Other Loop Plan')
+
+    const result = await tools['plan-read'].execute(
+      { worktree_name: 'other-loop' },
+      { sessionID: 'loop-session-123', directory: TEST_DIR } as any
+    )
+
+    expect(result).toContain('# Other Loop Plan')
+    expect(result).not.toContain('# Loop Plan')
   })
 
   test('falls back to session ID when not in a loop', async () => {

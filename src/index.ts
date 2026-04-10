@@ -383,7 +383,7 @@ You are in READ-ONLY mode for file system operations. You MUST NOT directly edit
 However, you CAN and SHOULD:
 - Use \`plan-write\` to write the plan
 - Use \`plan-edit\` to make targeted updates to the plan
-- Use \`plan-read\` to review the plan
+- Use \`plan-read\` to review the plan, including loop plans via \`worktree_name\`
 - Use \`plan-execute\` or \`memory-loop\` ONLY AFTER:
   1. The plan has been written via \`plan-write\`
   2. The user explicitly approves via the question tool

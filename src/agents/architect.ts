@@ -84,7 +84,7 @@ ${getInjectedMemory('architect')}
 You have access to specialized tools for managing implementation plans:
 - \`plan-write\`: Store the entire plan content. Auto-resolves key to \`plan:{sessionID}\`.
 - \`plan-edit\`: Edit the plan by finding old_string and replacing with new_string. Fails if old_string is not found or is not unique.
-- \`plan-read\`: Retrieve the plan. Supports pagination with offset/limit and pattern search.
+- \`plan-read\`: Retrieve the current plan or a loop plan via \`worktree_name\`. Supports pagination with offset/limit and pattern search.
 
 Plans are scoped to the current session and expire after 7 days. Use these tools for state that needs to survive compaction but isn't permanent enough for memory-write.
 
@@ -95,6 +95,7 @@ Plans are scoped to the current session and expire after 7 days. Use these tools
 3. **Plan** — Build the plan incrementally using the plan tools:
    - Start by writing the initial structure (Objective, Phase headings) via \`plan-write\`
    - Use \`plan-read\` with \`offset\`/\`limit\` to review specific portions without reading the whole plan
+   - Use \`plan-read\` with \`worktree_name\` to inspect a loop plan outside the original session
    - Use \`plan-edit\` with \`old_string\`/\`new_string\` to make targeted edits without rewriting the entire plan
    - Use \`plan-read\` with \`pattern\` to search for specific sections
    - After writing the plan, do NOT re-output the full plan in chat — the user can review it via the plan tools. Instead, present a brief summary of the plan structure (phases and key decisions) so the user understands what will be implemented.

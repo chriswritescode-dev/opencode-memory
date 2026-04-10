@@ -270,6 +270,7 @@ describe('LoopService', () => {
     expect(prompt).toContain('bugs, logic errors, missing error handling')
     expect(prompt).toContain('No issues found')
     expect(prompt).toContain('do not direct the agent to')
+    expect(prompt).toContain('plan-read with `worktree_name` set to `test-worktree`')
   })
 
   test('buildContinuationPrompt appends audit findings when provided', () => {
